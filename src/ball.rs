@@ -10,7 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{fmt::Display, path::Path};
+use std::{fmt::Display, io::Write, path::Path};
 
 use serde::{Deserialize, Serialize};
 
@@ -39,10 +39,9 @@ impl Display for BallMd {
 
 /// Ball up directory at `dir`, with compression level `level`
 /// Returns a litany of errors if anything fails
-pub fn dir_to_ball(dir: &Path, level: i32) -> Result<Vec<u8>, TheseusError> {
-    let ball = Vec::new();
-    let ze =
-        zstd::Encoder::new(ball, level).map_err(|e| TheseusError::Compression(e.to_string()))?;
+pub fn dir_to_ball(dir: &Path) -> Result<Vec<u8>, TheseusError> {
+    let mut ball = Vec::new();
+    let ze = snap::write::FrameEncoder::new(&mut ball);
     let mut baller = tar::Builder::new(ze);
     baller.mode(tar::HeaderMode::Deterministic);
     baller
@@ -51,14 +50,15 @@ pub fn dir_to_ball(dir: &Path, level: i32) -> Result<Vec<u8>, TheseusError> {
     baller
         .into_inner()
         .map_err(|e| TheseusError::Archive(e.to_string()))?
-        .finish()
-        .map_err(|e| TheseusError::Compression(e.to_string()))
+        .flush()
+        .map_err(|e| TheseusError::Compression(e.to_string()))?;
+    Ok(ball)
 }
 
 /// Unball `ball` into dir
 /// Returns a litany of errors if anything fails
 pub fn ball_to_dir(dir: &Path, ball: &[u8]) -> Result<(), TheseusError> {
-    let zd = zstd::Decoder::new(ball).map_err(|e| TheseusError::Compression(e.to_string()))?;
+    let zd = snap::read::FrameDecoder::new(ball);
     let mut unballer = tar::Archive::new(zd);
     unballer
         .unpack(dir)

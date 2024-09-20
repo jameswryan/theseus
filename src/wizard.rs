@@ -76,7 +76,7 @@ fn validate_plan(dir: &Path) -> Result<(), TheseusError> {
 }
 
 fn upload_plan(server: impl ToSocketAddrs, dir: &Path) -> anyhow::Result<()> {
-    let ball = dir_to_ball(dir, 9)?;
+    let ball = dir_to_ball(dir)?;
     let md = BallMd::new(&ball);
     info!("send_dir ballmd {}", md);
 
