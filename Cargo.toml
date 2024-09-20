@@ -13,10 +13,11 @@ nix = { version = "0.29.0", default-features = false, features = ["fs", "user", 
 postcard = { version = "1.0.10", default-features = false, features = ["use-std", "alloc"] }
 serde = { version = "1.0.210", default-features = false, features = ["serde_derive", "default", "alloc"] }
 serde_bytes = { version = "0.11.15", default-features = false }
+snap = "1.1.1"
 tar = { version = "0.4.41", default-features = false }
 thiserror = { version = "1.0.63", default-features = false }
 toml = { version = "0.8.19", default-features = false, features = ["display", "parse"] }
-zstd = { version = "0.13.2", default-features = false }
+walkdir = "2.5.0"
 
 [[bin]]
 name = "theseusd"

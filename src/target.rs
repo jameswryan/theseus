@@ -17,13 +17,13 @@ use std::path::{self, Path, PathBuf};
 use crate::error::*;
 use crate::plan::*;
 
-use log::{error, trace};
-use nix::unistd::{Gid, Uid};
+use log::{error, info, trace};
 use nix::{
     sys::stat::{fchmodat, FchmodatFlags, Mode},
-    unistd::{chown, Group, User},
+    unistd::{chown, Gid, Group, Uid, User},
 };
 use serde::Serialize;
+use walkdir::WalkDir;
 
 fn to_rwx(p: u32) -> String {
     match p {
@@ -74,7 +74,7 @@ impl Display for FileTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "DirTarget{{ {}, {}, {}, {}, {}}}",
+            "FileTarget{{ {}, {}, {}, {}, {}}}",
             self.src.display(),
             self.dst.display(),
             self.own,
@@ -120,7 +120,7 @@ impl FileTarget {
         let dst = rst
             .next()
             .ok_or(TheseusError::MissingDst(s.to_string()))
-            .map(|t| PathBuf::from(t.replace("_", "/")))?;
+            .map(|t| PathBuf::from(t.replace('_', "/")))?;
         let own = rst
             .next()
             .ok_or(TheseusError::MissingOwn(s.to_string()))?
@@ -134,6 +134,52 @@ impl FileTarget {
             .ok_or(TheseusError::MissingPrm(s.to_string()))
             .map(string_to_mode)??;
         trace!("read target {}", src.display());
+        Ok(Self {
+            src,
+            dst,
+            own,
+            grp,
+            mode,
+            saved: false,
+        })
+    }
+
+    /// Read a DirTarget from a path
+    /// `p` is a local path, like ./bin/sh:root:root:755
+    /// The destination is `/bin/sh`
+    pub fn from_path(p: &Path, prefix: &Path) -> Result<Self, TheseusError> {
+        let src = path::absolute(PathBuf::from(p))
+            .map_err(|e| TheseusError::Absolute(p.display().to_string(), e.to_string()))?;
+        let dst_aparent = p
+            .strip_prefix(prefix)
+            .unwrap_or(p)
+            .parent()
+            .ok_or(TheseusError::MissingParent(p.display().to_string()))?;
+        /* Satisfy ownership */
+        let rst_t = p
+            .file_name()
+            .ok_or(TheseusError::MissingFilename(p.display().to_string()))?
+            .to_string_lossy()
+            .into_owned();
+        let mut rst = rst_t.split(':');
+        let dst_fname = rst
+            .next()
+            .ok_or(TheseusError::MissingDst(p.display().to_string()))?;
+        let own = rst
+            .next()
+            .ok_or(TheseusError::MissingOwn(p.display().to_string()))?
+            .to_string();
+        let grp = rst
+            .next()
+            .ok_or(TheseusError::MissingGid(p.display().to_string()))?
+            .to_string();
+        let mode = rst
+            .next()
+            .ok_or(TheseusError::MissingPrm(p.display().to_string()))
+            .map(string_to_mode)??;
+        trace!("read target {}", src.display());
+
+        let dst = PathBuf::from("/").join(dst_aparent).join(dst_fname);
         Ok(Self {
             src,
             dst,
@@ -181,7 +227,7 @@ fn compute_save(p: &Path, prefix: &Path) -> Result<Option<FileTarget>, TheseusEr
         .map_or_else(|| st.st_gid.to_string(), |grp| grp.name);
     let mode = Mode::from_bits_truncate(st.st_mode);
 
-    let src = prefix.join(dst.display().to_string().replace("/", "_"));
+    let src = prefix.join(dst.display().to_string().replace('/', "_"));
     Ok(Some(FileTarget {
         src,
         dst,
@@ -270,4 +316,38 @@ pub fn plan_from_dir(dir: &Path) -> Result<Vec<FileTarget>, TheseusError> {
         .collect::<Result<Vec<FileTarget>, TheseusError>>()?;
 
     Ok(fts)
+}
+
+/// Read a plan from a filesystem with root at `root`
+pub fn plan_from_root(root: &Path) -> Result<Vec<FileTarget>, TheseusError> {
+    // TODO: This would be nice to do with iterators.
+    // However, that require lifting nested `Iterator<Item = Result<T,E>>` to
+    // Result<Iterator<Item = T>, E>, i.e.,
+    // `Iterator<Item = Result<Result<Result<T,E0>,E1>,E2>` to
+    // `Result<Iterator<Item = T`
+    // itertools::process_result should be able to handle it, but the lifetime
+    // requirements make it hard
+    // let (files, _): (Vec<_>, Vec<_>) = itertools::process_results(WalkDir::new(root), |walker| {
+    //     walker.partition(|p| !p.path().is_dir())
+    // })
+    // .map_err(|e| TheseusError::DirDir(e.to_string()))?;
+    // itertools::process_results(
+    //     files
+    //         .iter()
+    //         .map(walkdir::DirEntry::path)
+    //         .map(std::fs::canonicalize)
+    //         .map(|p| p.map_err(|e| TheseusError::DirEntry(e.kind()))),
+    //     |files| files.map(|p| FileTarget::from_path(&p)),
+    // )?;
+    let mut plan = Vec::new();
+    for entry in WalkDir::new(root) {
+        let entry = entry.map_err(|e| TheseusError::DirDir(e.to_string()))?;
+        trace!("Entry {}", entry.path().display());
+        if entry.path().is_file() {
+            let ft = FileTarget::from_path(entry.path(), root)?;
+            info!("FileTarget {}", ft.src.display());
+            plan.push(ft);
+        }
+    }
+    Ok(plan)
 }

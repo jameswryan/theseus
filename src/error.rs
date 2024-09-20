@@ -45,6 +45,10 @@ pub enum TheseusError {
     GetUser(String),
     #[error("missing host in {0}")]
     MissingHost(String),
+    #[error("missing parent in {0}")]
+    MissingParent(String),
+    #[error("missing filename in {0}")]
+    MissingFilename(String),
 
     #[error("invalid permission string length in {0}")]
     PermLen(String),
