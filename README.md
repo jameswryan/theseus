@@ -1,50 +1,61 @@
 # Theseus
 Theseus replaces your operating system one file at a time.
 
-Theseus consists of two components: `theseus`, the wizard (or client) component, and `theseusd` the daemon (or server) component.
+Theseus consists of two components: `theseus`, the wizard (or client) component, and `theseusg` the golem (or server) component.
 
 ## `theseus`
 `theseus` is the wizard component of Theseus.
-The wizard supports multiple commands, some of which operate on local data (`validate`) and some of which only operate on remote data (`upload`, `apply`).
-
-### Commands
-`theseus` has three subcommands: `validate`, `upload`, and `apply`.
-
-`validate` checks that a plan is in the proper form to be `upload`-ed and `apply`-ed to and by a daemon.
-
-`upload` uploads a plan to a daemon.
-If the daemon already has that plan, the wizard does not upload it again.
-
-`apply` commands a daemon to execute a plan.
+The wizard has some local commands (`help`, `list-golems`, `validate`), and some remote commands (`construct-golem`, `apply`).
+Local commands operate only on your local machine, while remote commands will connect to a remote machine and construct a golem.
 
 
-## `theseusd`
-`theseusd` is the daemon component of Theseus.
-Almost all of the time the daemon lies idle, until a wizard sends it a command.
-The daemon will try to execute the command, but may fail in the middle for any number of reasons.
-If that happens, the daemon will attempt to reset the system back to the state it was in before the command was partially executed.
-The execute/unwind logic is implemented in `src/plan.rs`, and execution for a `FileTarget` plan (the only type currently supported) is in `src/target.rs`
+## `theseusg`
+`theseusg` is the golem component of Theseus.
+It is not intended to be run interactively, but only by a wizard.
 
-### Commands
-`theseusd` has two subcommands: `validate`, and `run`.
+## Golems
+Theseus works by uploading a 'golem' binary to a target machine, and then sending it some instructions to carry out.
+Since the golem is written in rust, it must be compiled for that machine.
+If your target machine is running Linux, you can probably use a golem compiled for the `musl` C library, as it can be statically linked by `rustc`.
+For other targets, you'll likely need to compile a golem yourself on a similar machine.
+In the future, we may provide precompiled golems for some platforms.
 
-`validate` reads a config file and tries to ensure that it is valid.
-This involves parsing the configuration, but also verifying that several directories used to store daemon state exist and are correctly permissioned.
-`validate`-ing a config file results in modification to the file system.
 
-`run` reads a config file, and listens for commands from a wizard.
+## Getting started
+First, create a plan.
 
-## Security
-While `theseusd` does not directly execute code on behalf of a user, it does manage files on the system.
-Additionally, `theseusd` speaks raw TCP and does not support any form of authentication, or even transport encryption.
-This makes systems running `theseusd` extremely vulnerable if it is run on a network interface accessible by adversaries.
-A recommended way around this is to use a SDN with powerful ACLs to require authentication to talk to the `theseusd` interface/port.
-The author uses and recommends Tailscale for this purpose, but many such solutions are available.
+A plan is a tree of files and directories, along with metadata about the files, such as owner, group, and UNIX permissions.
+The filesyetem structure of your plan should match that of the machine you would like to apply the plan to.
+So if you want the file `/etc/ssh/sshd_config` to be in the plan it should look like:
+```
+.
+└── etc
+    └── ssh
+        └── sshd_config
+```
 
-`theseusd` needs to run with enough privileges to manage any file a wizard asks it to.
-Generally, this means it needs to run with `root` privileges.
-At this time, `theseusd` does not support internal privilege escalation, nor does it fork a new process or thread to handle incoming connections.
-However, `theseusd` is written in Rust and is believed to be free of internal memory safety, privilege escalation vulnerabilies.
+Theseus plans store the metadata in the filename to allow all files to be editable on the wizard's local machine.
+So if the file metadata in the example above should be `owner: root, group: wheel, permissions: 644`, the file name should be `sshd_config:root:wheel:644`.
+
+A plan with multiple such files might look like:
+```
+.
+├── etc
+│   ├── rc.conf
+│   ├── rc.conf:root:wheel:644
+│   └── ssh
+│       └── sshd_config:root:wheel:644
+└── usr
+    └── local
+        └── etc
+            ├── doas.conf:root:wheel:644
+            └── smb4.conf:root:wheel:644
+```
+
+Next, you'll need passwordless ssh access to the machine you would like to apply the plan to.
+The golem does not support escalating privileges, so you'll probably need passwordless access to the root user.
+
+Check that your plan is valid with `theseus validate </path/to/your/plan>`, and apply it to the target machine with `theseus apply -a <ip address or hostname> -d </path/to/your/plan>`.
 
 
 ## Copying

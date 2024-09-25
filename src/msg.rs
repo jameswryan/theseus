@@ -10,16 +10,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use log::error;
 use postcard::{from_bytes, to_stdvec};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tracing::error;
 
 use crate::ball::*;
 use crate::error::*;
 use crate::lvrw::*;
 
-pub trait DaemonResponse {
+pub trait GolemResponse {
     /// Read a response from r
     fn read(r: &mut impl std::io::Read) -> Result<Self, TheseusError>
     where
@@ -34,7 +34,7 @@ pub trait DaemonResponse {
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Error)]
-pub enum DaemonError {
+pub enum GolemError {
     #[error("already have this ball")]
     BallExists,
     #[error("ball invalid checksum")]
@@ -43,11 +43,17 @@ pub enum DaemonError {
     #[error("server error {0}")]
     ServerError(String),
 
+    #[error("dependency {0}")]
+    DependencyError(String),
+
+    #[error("dependency {0}")]
+    PlanError(String),
+
     #[error("invalid request")]
     InvalidRequest,
 }
 
-impl DaemonResponse for Result<(), DaemonError> {
+impl GolemResponse for Result<(), GolemError> {
     /// Read a response from r
     /// Log if error encountered
     fn read(r: &mut impl std::io::Read) -> Result<Self, TheseusError> {
@@ -57,8 +63,8 @@ impl DaemonResponse for Result<(), DaemonError> {
 
     /// Write a response to w
     fn write(&self, w: &mut impl std::io::Write) -> Result<(), TheseusError> {
-        let to_w = to_stdvec(self).map_err(|e| TheseusError::WriteResponse(e.to_string()))?;
-        lvw(w, &to_w).map_err(|e| TheseusError::WriteResponse(e.to_string()))
+        let to_w = to_stdvec(self)?;
+        Ok(lvw(w, &to_w)?)
     }
 
     /// Write a response to w
@@ -69,25 +75,31 @@ impl DaemonResponse for Result<(), DaemonError> {
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum TheseusRequest {
+pub enum GolemRequest {
     /// Receive a new set of files
     /// Completely replaces the old set of files
     Receive(BallMd),
     /// Apply a new set of files
     Apply,
+
+    /// Kill the golem
+    Kill,
+
+    /// Ping the golem to ensure connectivity
+    Ping,
 }
 
-impl TheseusRequest {
+impl GolemRequest {
     /// Read a request from r
     /// If invalid, log an error and send over w
     pub fn read<RW: std::io::Read + std::io::Write>(rw: &mut RW) -> Result<Self, TheseusError> {
         let buf = lvr(rw).map_err(|e| TheseusError::ReadRequest(e.to_string()))?;
         from_bytes(&buf).map_err(|e| {
-            match Err(DaemonError::InvalidRequest).write(rw) {
+            match Err(GolemError::InvalidRequest).write(rw) {
                 Ok(_) => {}
-                Err(e) => return TheseusError::WriteResponse(e.to_string()),
+                Err(e) => return TheseusError::WriteResponse(format!("{e:#}")),
             };
-            TheseusError::ReadRequest(e.to_string())
+            TheseusError::ReadRequest(format!("{e:#}"))
         })
     }
 
@@ -97,11 +109,11 @@ impl TheseusRequest {
     pub fn write<RW: std::io::Read + std::io::Write>(
         &self,
         rw: &mut RW,
-    ) -> Result<Result<(), DaemonError>, TheseusError> {
+    ) -> Result<Result<(), GolemError>, TheseusError> {
         // let mut ser = Serializer::new(w);
         let to_w = to_stdvec(self).map_err(|e| TheseusError::WriteRequest(e.to_string()))?;
         lvw(rw, &to_w).map_err(|e| TheseusError::WriteRequest(e.to_string()))?;
 
-        DaemonResponse::read(rw)
+        GolemResponse::read(rw)
     }
 }

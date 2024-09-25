@@ -9,6 +9,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+#![allow(refining_impl_trait)]
 
 use std::fmt::Display;
 use std::fs::copy;
@@ -17,12 +18,12 @@ use std::path::{self, Path, PathBuf};
 use crate::error::*;
 use crate::plan::*;
 
-use log::{error, info, trace};
 use nix::{
     sys::stat::{fchmodat, FchmodatFlags, Mode},
     unistd::{chown, Gid, Group, Uid, User},
 };
 use serde::Serialize;
+use tracing::{debug, error, trace};
 use walkdir::WalkDir;
 
 fn to_rwx(p: u32) -> String {
@@ -58,6 +59,76 @@ fn string_to_mode(s: &str) -> Result<Mode, TheseusError> {
     let bits = nix::libc::mode_t::from_str_radix(s, 8)
         .map_err(|e| TheseusError::InvalidPrm(e.to_string()))?;
     Ok(Mode::from_bits_truncate(bits))
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct DirTarget {
+    path: PathBuf,
+    created: bool,
+}
+
+impl DirTarget {
+    /// Create a new DirTarget from a path
+    /// Returns `None` if `dir` is not an absolute path
+    pub fn new(dir: &Path) -> Option<DirTarget> {
+        match dir.is_absolute() {
+            true => Some(Self {
+                path: dir.to_owned(),
+                created: false,
+            }),
+            false => None,
+        }
+    }
+}
+
+impl Display for DirTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.path.display())
+    }
+}
+
+impl PartialOrd<DirTarget> for DirTarget {
+    fn partial_cmp(&self, other: &DirTarget) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for DirTarget {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.path.cmp(&other.path)
+    }
+}
+
+impl PlanItem<()> for DirTarget {
+    type Error = TheseusError;
+
+    fn execute(self, _: Option<&()>) -> Result<Self, TheseusError> {
+        trace!("executing DirTarget {}", self.path.display());
+        if self.path.exists() && self.path.is_dir() {
+            return Ok(Self {
+                path: self.path,
+                created: false,
+            });
+        }
+        std::fs::create_dir(&self.path)
+            .map_err(|e| TheseusError::Create(self.to_string(), e.to_string()))?;
+        debug!("created {}", self.path.display());
+        Ok(DirTarget {
+            path: self.path,
+            created: true,
+        })
+    }
+
+    fn unwind(&self) {
+        if self.created {
+            std::fs::remove_dir(&self.path)
+                .unwrap_or_else(|e| error!("removing {} {}", self.path.display(), e));
+        }
+    }
+
+    fn identify(&self) -> String {
+        self.to_string()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -117,10 +188,12 @@ impl FileTarget {
         let src = path::absolute(PathBuf::from(src))
             .map_err(|e| TheseusError::Absolute(src.display().to_string(), e.to_string()))?;
         let mut rst = s.split(':');
-        let dst = rst
-            .next()
-            .ok_or(TheseusError::MissingDst(s.to_string()))
-            .map(|t| PathBuf::from(t.replace('_', "/")))?;
+        let dst = path::absolute(
+            rst.next()
+                .ok_or(TheseusError::MissingDst(s.to_string()))
+                .map(|t| PathBuf::from(t.replace('_', "/")))?,
+        )
+        .map_err(|e| TheseusError::Absolute(src.display().to_string(), e.to_string()))?;
         let own = rst
             .next()
             .ok_or(TheseusError::MissingOwn(s.to_string()))?
@@ -211,10 +284,11 @@ impl FileTarget {
 }
 
 #[inline]
-fn compute_save(p: &Path, prefix: &Path) -> Result<Option<FileTarget>, TheseusError> {
-    if !p.exists() {
+fn compute_save(p: &Path, prefix: Option<&Path>) -> Result<Option<FileTarget>, TheseusError> {
+    if !p.exists() || prefix.is_none() {
         return Ok(None);
     }
+    let prefix = prefix.unwrap();
     let st = nix::sys::stat::stat(p)
         .map_err(|e| TheseusError::Stat(p.display().to_string(), e.to_string()))?;
     let dst = path::absolute(p)
@@ -238,30 +312,29 @@ fn compute_save(p: &Path, prefix: &Path) -> Result<Option<FileTarget>, TheseusEr
     }))
 }
 
-impl PlanItem for FileTarget {
-    fn execute(self, save: &Path) -> Option<Self> {
-        trace!("execute {}", self.src.display());
-        let (uid, gid) = self.ids().map_err(|e| error!("{e}")).ok()?;
+impl PlanItem<Path> for FileTarget {
+    type Error = TheseusError;
 
-        let save = compute_save(&self.dst, save)
-            .map_err(|e| error!("{e}"))
-            .ok()?;
+    fn execute(self, savepath: Option<&Path>) -> Result<Self, TheseusError> {
+        trace!("execute {}", self.src.display());
+        let (uid, gid) = self.ids()?;
+
+        let save = compute_save(&self.dst, savepath)?;
         if let Some(save) = save.as_ref() {
             /* Unwrap safe here */
-            copy(&self.dst, &save.src).map_err(|e| error!("{e}")).ok()?;
+            copy(&self.dst, &save.src)
+                .map_err(|e| TheseusError::Copy(save.src.display().to_string(), e.kind()))?;
         }
-
-        copy(&self.src, &self.dst).map_err(|e| error!("{e}")).ok()?;
+        copy(&self.src, &self.dst)
+            .map_err(|e| TheseusError::Copy(self.src.display().to_string(), e.kind()))?;
 
         fchmodat(None, &self.src, self.mode, FchmodatFlags::FollowSymlink)
-            .map_err(|e| error!("{e}"))
-            .ok()?;
+            .map_err(|e| TheseusError::Chmod(self.src.display().to_string(), e.to_string()))?;
 
         chown(&self.src, Some(uid), Some(gid))
-            .map_err(|e| error!("{e}"))
-            .ok()?;
+            .map_err(|e| TheseusError::Chown(self.src.display().to_string(), e.to_string()))?;
 
-        save.or(Some(self))
+        Ok(save.unwrap_or(self))
     }
 
     fn unwind(&self) {
@@ -284,6 +357,37 @@ impl PlanItem for FileTarget {
 
     fn identify(&self) -> String {
         self.dst.display().to_string()
+    }
+}
+
+impl HasDeps<Path, ()> for FileTarget {
+    type Dep = DirTarget;
+
+    fn dependencies(&self) -> impl IntoIterator<Item = DirTarget> {
+        assert!(
+            self.dst.is_absolute(),
+            "{} is an absolute path",
+            self.dst.display()
+        );
+
+        self.dst
+            .parent()
+            .unwrap_or_else(|| panic!("{} is not root", self.dst.display()))
+            .ancestors()
+            .map(|a| DirTarget {
+                path: a.to_owned(),
+                created: false,
+            })
+            .collect::<Vec<_>>()
+    }
+}
+
+impl DependentPlan<(), Path, DirTarget, Vec<DirTarget>, FileTarget> for Vec<FileTarget> {
+    fn dependencies(&self) -> Vec<DirTarget> {
+        let mut deps: Vec<_> = self.iter().flat_map(|ft| ft.dependencies()).collect();
+        deps.sort();
+        deps.dedup();
+        deps
     }
 }
 
@@ -345,7 +449,7 @@ pub fn plan_from_root(root: &Path) -> Result<Vec<FileTarget>, TheseusError> {
         trace!("Entry {}", entry.path().display());
         if entry.path().is_file() {
             let ft = FileTarget::from_path(entry.path(), root)?;
-            info!("FileTarget {}", ft.src.display());
+            debug!("FileTarget {}", ft.src.display());
             plan.push(ft);
         }
     }

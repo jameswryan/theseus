@@ -11,26 +11,28 @@
 // limitations under the License.
 
 use std::{
+    collections::HashMap,
     io::Write,
-    net::{TcpStream, ToSocketAddrs},
-    path::Path,
+    net::{IpAddr, Ipv4Addr, TcpStream},
+    path::{Path, PathBuf},
+    process::{self, Output},
 };
 
-use anyhow::Result;
+use anyhow::{anyhow, bail, Context, Result};
+// TODO: Use Argh because it seems nicer and produces smaller binaries
+use clap::{CommandFactory, Parser, Subcommand};
+use openssh::{KnownHosts, Session};
+use tracing::{debug, error, info, instrument, trace};
 
-use log::{info, trace};
-
-use theseus::ball::*;
-use theseus::error::*;
-use theseus::msg::*;
-use theseus::target::*;
-
-use clap::{Parser, Subcommand};
+use theseus::{
+    ball::*, error::*, is_golem, msg::*, plan::DependentPlan, target::*, TheseusPlatform,
+};
 
 #[derive(Debug, Parser)]
-#[command(arg_required_else_help = true)]
+#[command(arg_required_else_help = true, version, about, long_about=None)]
 struct WizardArgs {
-    #[arg(short, help="verbosity level 0-4", action=clap::ArgAction::Count)]
+    /// Verbosity level 0-4
+    #[arg(short, action=clap::ArgAction::Count, global=true)]
     verbose: u8,
     #[command(subcommand)]
     command: Option<Command>,
@@ -41,100 +43,354 @@ enum Command {
     /// Apply the plan on a remote theseus server
     Apply {
         /// Address of theseus server
-        #[arg(short, long, required = true)]
+        #[arg(short, required = true)]
         address: String,
+
+        /// Directory containing plan to apply
+        #[arg(short, required = true)]
+        dir: PathBuf,
+
         /// Port on remote theseus server
-        #[arg(short, long, default_value = "6666")]
+        #[arg(short, default_value = "6666")]
         port: u16,
-    },
-    /// Upload a plan to a theseus server
-    Upload {
-        /// Address of theseus server
-        #[arg(short, long, required = true)]
-        address: String,
-        /// Directory containing a plan
-        #[arg(required = true)]
-        input: String,
-        /// Port on remote theseus server
-        #[arg(short, long, required = true)]
-        port: u16,
+
+        /// Username on remote machine
+        #[arg(short, default_value = "root")]
+        username: String,
     },
     /// Validate a plan
     Validate {
         /// Directory containing a plan
         #[arg(required = true)]
-        input: String,
+        dir: String,
     },
+
+    /// Construct a golem on a remote machine
+    ConstructGolem {
+        /// Hostname or address
+        #[arg(short, required = true)]
+        address: String,
+
+        /// Port used by theseus on remote machine
+        #[arg(short, default_value = "6666")]
+        port: u16,
+
+        /// Username on remote machine
+        #[arg(short, default_value = "root")]
+        username: String,
+    },
+
+    /// List available golems
+    ListGolems {},
 }
 
 /// Reads a plan from a directory and checks for errors
 /// Does not check that the target _destinations_ are valid,
 /// but does check that the plan is properly formed
-fn validate_plan(dir: &Path) -> Result<(), TheseusError> {
-    let _plan = plan_from_dir(dir)?;
-    Ok(())
+fn validate_plan(dir: &Path) -> Result<Vec<FileTarget>, TheseusError> {
+    plan_from_root(dir)
 }
 
-fn upload_plan(server: impl ToSocketAddrs, dir: &Path) -> anyhow::Result<()> {
-    let ball = dir_to_ball(dir)?;
-    let md = BallMd::new(&ball);
-    info!("send_dir ballmd {}", md);
+fn find_golems() -> Result<HashMap<TheseusPlatform, PathBuf>> {
+    // TODO: better
+    let search_paths = [
+        env!("CARGO_TARGET_DIR"),
+        "/var/lib/theseus/golems",
+        "./data/golems",
+    ];
+    let mut golems = HashMap::new();
+    for sp in search_paths.iter().filter(|p| Path::new(p).exists()) {
+        debug!("Looking for golem in {sp}");
+        for ent in std::fs::read_dir(sp)? {
+            let ent = ent?;
+            if ent.file_type()?.is_file() {
+                if let Some(p) = is_golem(ent.file_name().to_string_lossy()) {
+                    golems.insert(p, ent.path());
+                }
+            }
+        }
+    }
+    Ok(golems)
+}
 
-    let mut stream = TcpStream::connect(server)?;
-    let recv_err = TheseusRequest::Receive(md)
-        .write(&mut stream)
-        .map_err(|e| TheseusError::WriteRequest(e.to_string()))?
-        .inspect(|_| info!("Ok to transmit"));
-    match recv_err {
-        Ok(_) => {
-            trace!("Want to write {}", ball.len());
-            stream
-                .write_all(&ball)
-                .map_err(|e| TheseusError::WriteBall(e.to_string()))?;
-        }
-        Err(DaemonError::BallExists) => {
-            info!("No need to transmit, ball exists");
-            return Ok(());
-        }
-        Err(e) => return Err(anyhow::anyhow!(e)),
+fn copy_golem_to(
+    host_user: &(impl AsRef<str>, impl AsRef<str>),
+    gpath: &Path,
+    rpath: &Path,
+) -> Result<Output> {
+    if !rpath.is_absolute() {
+        bail!("{} must be an absolute path", rpath.display());
     }
 
-    Ok(Result::<(), DaemonError>::read(&mut stream)??)
+    // Crates exist that don't require us to manually shell out to scp, but
+    // they are extra dependencies, and RemoteGolem -ing already requires
+    // interaction-free connection. This is ok for now
+    let scpargs = [
+        gpath.display().to_string(),
+        format!(
+            "{}@{}:{}",
+            host_user.1.as_ref(),
+            host_user.0.as_ref(),
+            rpath.display()
+        ),
+    ];
+    let mut cmd = std::process::Command::new("scp");
+    cmd.args(scpargs)
+        .stdin(process::Stdio::piped())
+        .stdout(process::Stdio::inherit())
+        .stderr(process::Stdio::inherit());
+    let out = cmd.output()?;
+    trace!(
+        "Ran {} {:?} with {}",
+        cmd.get_program().to_string_lossy(),
+        cmd.get_args(),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    Ok(out)
 }
 
-fn apply_plan(server: impl ToSocketAddrs) -> anyhow::Result<()> {
-    let mut stream = TcpStream::connect(server)?;
-    info!("Connected!");
-    let rsp = TheseusRequest::Apply.write(&mut stream)?;
-    info!("{:?}", rsp);
-    Ok(())
+#[derive(Debug)]
+struct RemoteGolem {
+    session: Session,
+    stream: TcpStream,
+    forward: (openssh::ForwardType, std::net::SocketAddr),
 }
 
-fn main() -> anyhow::Result<()> {
-    let args = WizardArgs::parse();
+impl RemoteGolem {
+    async fn construct(host: &str, user: &str, port: u16) -> Result<Self> {
+        info!("Establishing session with {host}");
+        let mut session =
+            Session::connect_mux(format!("{user}@{host}"), KnownHosts::Strict).await?;
+        debug!("Session established");
 
-    env_logger::builder()
-        .filter_level(match args.verbose {
-            0 => log::LevelFilter::Error,
-            1 => log::LevelFilter::Warn,
-            2 => log::LevelFilter::Info,
-            3 => log::LevelFilter::Debug,
-            4.. => log::LevelFilter::Trace,
+        info!("Getting {host} platform");
+        let platform = Self::get_remote_platform(&mut session)
+            .await
+            .context("getting remote platform")?;
+        info!("Platform is {platform}");
+
+        debug!("Looking for golems for {platform}");
+        let golems = find_golems().context("while finding golems")?;
+        let golem_path = golems.get(&platform).ok_or(anyhow!("no golems found"))?;
+        debug!("Found golem at {}", golem_path.display());
+
+        info!("Copying golem to {host}",);
+        copy_golem_to(&(host, user), golem_path, Path::new("/tmp/theseusg"))
+            .context("copying golem")?;
+        debug!("Copied");
+
+        info!("Starting golem on {host}",);
+        // In theory it would be nice to keep a handle to the golem. However,
+        // we can't actually kill it properly. Instead, we can use our stream
+        // to send it a 'Kill' request when we're finished
+        session
+            .command("/tmp/theseusg")
+            .args(["-vvvv"])
+            .spawn()
+            .await
+            .context("while spawning golem")?
+            .disconnect()
+            .await
+            .context("while disconnecting from golem")?;
+        debug!("Started");
+
+        /* Give the golem some time to startup */
+        std::thread::sleep(std::time::Duration::from_millis(100_u64));
+
+        info!("Forwarding local port {port} to remote port {port}");
+        let (fwt, fwsck) = (
+            openssh::ForwardType::Local,
+            std::net::SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port),
+        );
+        session
+            .request_port_forward(
+                fwt,
+                openssh::Socket::from(fwsck),
+                openssh::Socket::from(fwsck),
+            )
+            .await
+            .context("while requesting port forward")?;
+        debug!("Forwarded");
+
+        info!("Connecting to golem");
+        let mut stream = TcpStream::connect(("localhost", port)).context("connecting to golem")?;
+        debug!("Connected");
+
+        info!("Testing golem communication");
+        GolemRequest::Ping
+            .write(&mut stream)
+            .context("while pinging golem")?
+            .context("in response to ping")?;
+        debug!("Communication working");
+
+        Ok(Self {
+            session,
+            stream,
+            forward: (fwt, fwsck),
         })
-        .init();
+    }
 
+    async fn get_remote_platform(sess: &mut Session) -> Result<TheseusPlatform> {
+        let outv = sess
+            .command("uname")
+            .args(["-sm"])
+            .output()
+            .await
+            .context("while running remote uname")?
+            .stdout;
+        let out = String::from_utf8_lossy(&outv);
+        if out.contains("Linux x86_64") {
+            Ok(TheseusPlatform::Amd64Linux)
+        } else if out.contains("Linux aarch64") {
+            Ok(TheseusPlatform::Arm64Linux)
+        } else if out.contains("FreeBSD amd64") {
+            Ok(TheseusPlatform::Amd64FreeBsd)
+        } else if out.contains("FreeBSD arm64") {
+            Ok(TheseusPlatform::Arm64FreeBsd)
+        } else if out.contains("SunOS i86pc") {
+            // TODO: Does this get confused with Oracle Solaris 11?
+            // BIKESHED: did anyone ask?
+            Ok(TheseusPlatform::Amd64Illumos)
+        } else if out.contains("Darwin arm64") {
+            Ok(TheseusPlatform::Arm64Darwin)
+        } else {
+            Err(anyhow!(TheseusError::Platform(out.to_string())))
+        }
+    }
+
+    async fn kill(mut self) -> Result<()> {
+        info!("Killing golem");
+        GolemRequest::Kill
+            .write(&mut self.stream)
+            .context("while sending golem kill")?
+            .unwrap_or_else(|e| error!("Golem refuses to die because: {}", e));
+        debug!("Killed");
+
+        info!("Closing port forward");
+        let (fwt, fwsck) = self.forward;
+        self.session.close_port_forward(fwt, fwsck, fwsck).await?;
+        debug!("Closed");
+
+        info!("Closing session");
+        self.session.close().await?;
+        debug!("Closed");
+
+        Ok(())
+    }
+
+    fn upload(&mut self, ball_md: (BallMd, Vec<u8>)) -> anyhow::Result<()> {
+        let (md, ball) = ball_md;
+
+        info!("send ballmd {}", md);
+
+        let recv_err = GolemRequest::Receive(md)
+            .write(&mut self.stream)
+            .map_err(|e| TheseusError::WriteRequest(e.to_string()))?
+            .inspect(|_| info!("ok to transmit"));
+        match recv_err {
+            Ok(_) => {
+                trace!("Want to write {}", ball.len());
+                self.stream
+                    .write_all(&ball)
+                    .map_err(|e| TheseusError::WriteBall(e.to_string()))?;
+            }
+            Err(GolemError::BallExists) => {
+                info!("No need to transmit, ball exists");
+                return Ok(());
+            }
+            Err(e) => return Err(e).context("sending receive request"),
+        }
+
+        Ok(Result::<(), GolemError>::read(&mut self.stream)??)
+    }
+
+    /// Instruct the golem to apply the currently loaded plan
+    fn apply_plan(&mut self) -> anyhow::Result<()> {
+        info!("Connected!");
+        let rsp = GolemRequest::Apply.write(&mut self.stream)?;
+        match rsp {
+            Ok(()) => info!("plan applied successfully!"),
+            Err(ge) => match ge {
+                GolemError::BallExists => unreachable!(),
+                GolemError::BallChecksum => unreachable!(),
+                GolemError::ServerError(e) => error!("Golem internal error: {e}"),
+                GolemError::DependencyError(e) => error!("Golem dependency error: {e}"),
+                GolemError::PlanError(e) => error!("Golem plan error: {e}"),
+                GolemError::InvalidRequest => error!("Transmission error!"),
+            },
+        }
+        Ok(())
+    }
+}
+
+async fn try_main(args: WizardArgs) -> anyhow::Result<()> {
+    let tracer = tracing_subscriber::fmt()
+        .without_time()
+        .compact()
+        .with_ansi(false)
+        .with_max_level(match args.verbose {
+            0 => tracing::Level::ERROR,
+            1 => tracing::Level::WARN,
+            2 => tracing::Level::INFO,
+            3 => tracing::Level::DEBUG,
+            4.. => tracing::Level::TRACE,
+        })
+        .finish();
+    tracing::subscriber::set_global_default(tracer)?;
     match args.command {
-        Some(Command::Validate { input }) => {
-            validate_plan(Path::new(&input))?;
-            println!("Plan {} is valid", &input);
+        Some(Command::Validate { dir }) => {
+            let plan = validate_plan(Path::new(&dir))?;
+            println!("Plan {} is valid", &dir);
+            println!("Depends on: ");
+            plan.print_deps();
             Ok(())
         }
-        Some(Command::Upload {
+
+        Some(Command::Apply {
             address,
-            input,
+            username,
             port,
-        }) => upload_plan((address, port), Path::new(&input)),
-        Some(Command::Apply { address, port }) => apply_plan((address, port)),
-        None => unreachable!(),
+            dir,
+        }) => {
+            let mut golem = RemoteGolem::construct(&address, &username, port).await?;
+
+            let _plan_valid = validate_plan(&dir)?;
+            let ball = dir_to_ball(&dir)?;
+            let md = BallMd::new(&ball);
+            golem.upload((md, ball))?;
+            golem.apply_plan()?;
+
+            golem.kill().await?;
+            Ok(())
+        }
+
+        Some(Command::ConstructGolem {
+            address,
+            username,
+            port,
+        }) => {
+            let golem = RemoteGolem::construct(&address, &username, port).await?;
+
+            golem.kill().await?;
+            Ok(())
+        }
+        Some(Command::ListGolems {}) => {
+            println!("Found golems for");
+            find_golems()?.keys().for_each(|p| println!("\t{p}"));
+            Ok(())
+        }
+
+        _ => WizardArgs::command().print_help().context("no arguments"),
+    }
+}
+
+#[instrument]
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    let args = WizardArgs::parse();
+
+    match try_main(args).await {
+        Ok(_) => {}
+        Err(e) => eprintln!("{e:#}"),
     }
 }

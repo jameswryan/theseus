@@ -49,6 +49,14 @@ pub enum TheseusError {
     MissingParent(String),
     #[error("missing filename in {0}")]
     MissingFilename(String),
+    #[error("creating {0} {1}")]
+    Create(String, String),
+    #[error("copying {0} {1}")]
+    Copy(String, io::ErrorKind),
+    #[error("Changing mode {0} {1}")]
+    Chmod(String, String),
+    #[error("changing owner")]
+    Chown(String, String),
 
     #[error("invalid permission string length in {0}")]
     PermLen(String),
@@ -91,8 +99,23 @@ pub enum TheseusError {
     #[error("fatal server {0}")]
     Server(String),
 
+    #[error("accepting {0}")]
+    Accept(String),
+
     #[error("compression {0}")]
     Compression(String),
     #[error("archive {0}")]
     Archive(String),
+
+    #[error("unknown/unsupported platform triple {0}")]
+    Platform(String),
+
+    #[error("io error")]
+    Io(#[from] std::io::Error),
+
+    #[error("constructing golem")]
+    Construct(#[from] anyhow::Error),
+
+    #[error("Serializing to postcard")]
+    Postcard(#[from] postcard::Error),
 }

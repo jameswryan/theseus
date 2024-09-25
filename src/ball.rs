@@ -13,6 +13,7 @@
 use std::{fmt::Display, io::Write, path::Path};
 
 use serde::{Deserialize, Serialize};
+use sha3::Digest;
 
 use crate::error::TheseusError;
 
@@ -26,14 +27,22 @@ pub struct BallMd {
 impl BallMd {
     pub fn new(ball: &[u8]) -> Self {
         let size = ball.len() as u64;
-        let checksum = blake3::hash(ball).into();
+        // TODO: does 32 really need to be in 3 places?
+        let mut checksum = [0; 32];
+        let _ck = sha3::Sha3_256::digest(ball);
+        checksum.copy_from_slice(&_ck);
         Self { size, checksum }
     }
 }
 
 impl Display for BallMd {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", blake3::Hash::from_bytes(self.checksum))
+        // TODO: does 32 really need to be in 3 places?
+        write!(
+            f,
+            "{}",
+            faster_hex::hex_string::<{ 32 * 2 }>(&self.checksum)
+        )
     }
 }
 
