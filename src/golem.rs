@@ -10,12 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ffi::OsString;
-use std::io::Write;
-use std::net::TcpListener;
-use std::os::unix::fs::OpenOptionsExt;
-use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::{io::Write, net::TcpStream, os::unix::fs::OpenOptionsExt, path::PathBuf};
 
 use clap::Parser;
 use tracing::{debug, error, info, trace, warn};
@@ -91,16 +86,9 @@ impl Golem {
 
     /// Run the theseus golem
     pub fn run(&mut self) -> Result<(), TheseusError> {
-        let listener =
-            TcpListener::bind(("0.0.0.0", self.port)).map_err(|e| TheseusError::Bind(e.kind()))?;
-
-        info!("Listening on localhost:{}", self.port);
-
-        let stream = listener.accept()?.0;
-
+        let stream = TcpStream::connect(("localhost", self.port))?;
         self.conn_handler(stream)?;
         Ok(())
-        // Err(TheseusError::Server("no more connections".into()))
     }
 
     /// Handle a new connection

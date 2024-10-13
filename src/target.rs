@@ -18,28 +18,13 @@ use std::path::{self, Path, PathBuf};
 use crate::error::*;
 use crate::plan::*;
 
+use nix::NixPath;
 use nix::{
-    sys::stat::{fchmodat, FchmodatFlags, Mode},
-    unistd::{chown, Gid, Group, Uid, User},
+    sys::stat::{fchmodat, stat, FchmodatFlags, Mode},
+    unistd::{chown, getgid, getuid, Gid, Group, Uid, User},
 };
-use serde::Serialize;
 use tracing::{debug, error, trace};
 use walkdir::WalkDir;
-
-fn to_rwx(p: u32) -> String {
-    match p {
-        0b000 => "---",
-        0b001 => "-wx",
-        0b010 => "-wx",
-        0b011 => "--x",
-        0b100 => "r--",
-        0b101 => "r-x",
-        0b110 => "rw-",
-        0b111 => "rwx",
-        _ => unreachable!(),
-    }
-    .to_string()
-}
 
 fn mode_to_string(m: Mode) -> String {
     let m = m.bits();
@@ -47,33 +32,162 @@ fn mode_to_string(m: Mode) -> String {
     let g = (m >> 3) & 7;
     let w = m & 7;
 
-    format!(
-        "{}{}{}",
-        to_rwx(o as u32),
-        to_rwx(g as u32),
-        to_rwx(w as u32)
-    )
+    format!("{o:o}{g:o}{w:o}",)
 }
 
-fn string_to_mode(s: &str) -> Result<Mode, TheseusError> {
+pub fn string_to_mode(s: &str) -> Result<Mode, TheseusError> {
     let bits = nix::libc::mode_t::from_str_radix(s, 8)
         .map_err(|e| TheseusError::InvalidPrm(e.to_string()))?;
     Ok(Mode::from_bits_truncate(bits))
 }
 
+/// Attributes are attributes of a filesystem entry
+/// They may be unspecified, and so are optional
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Attributes {
+    /// The owner
+    /// May be a uid or the name of a user
+    pub own: Option<String>,
+    /// The group
+    /// May be a gid or the name of a group
+    pub grp: Option<String>,
+    /// The mode
+    /// Must be in `rwxrwxrwx` format
+    pub mode: Option<Mode>,
+}
+
+impl Attributes {
+    /// Convert an `Iterator<Item = String>` to an `Attributes`
+    /// If any of `own`, `grp`, or `mode` are `*`, they are treated as
+    /// unspecified
+    pub fn parse<'a, S: Iterator<Item = &'a str> + std::fmt::Debug>(mut s: S) -> Self {
+        let own = s.next().and_then(Self::from_star);
+        let grp = s.next().and_then(Self::from_star);
+        let mode = s.next().and_then(|m| string_to_mode(m).ok());
+
+        Self { own, grp, mode }
+    }
+
+    /// Get the `Attributes` of a path
+    pub fn from_path(p: &Path) -> Result<Self, TheseusError> {
+        let st = stat(p)
+            .map_err(|e| TheseusError::Stat(e.to_string(), p.to_string_lossy().into_owned()))?;
+
+        Ok(Self {
+            own: Some(st.st_uid.to_string()),
+            grp: Some(st.st_gid.to_string()),
+            mode: Some(Mode::from_bits_truncate(st.st_mode)),
+        })
+    }
+
+    /// Create an `Attributes` with all attributes unspecified
+    pub fn unspecified() -> Self {
+        Self {
+            own: None,
+            grp: None,
+            mode: None,
+        }
+    }
+
+    fn from_star(s: &str) -> Option<String> {
+        match s == "*" {
+            true => None,
+            false => Some(s.to_owned()),
+        }
+    }
+
+    /// Returns the uid of the user in the attribute
+    /// If a numeric uid is stored, return it.
+    /// If the system has no user with the stored name, return TheseusError::MissingUser
+    /// If no user/uid is stored, return the current user
+    pub fn get_uid(&self) -> Result<Uid, TheseusError> {
+        if self.own.is_none() {
+            return Ok(getuid());
+        }
+        let own = self.own.as_ref().unwrap();
+        match num_if(own, 10) {
+            /* A uid */
+            Some(uid) => Ok(Uid::from_raw(uid)),
+            /* A username */
+            None => Ok(User::from_name(own)
+                .map_err(|e| TheseusError::GetUser(e.to_string()))?
+                .ok_or(TheseusError::MissingUser(own.to_owned()))?
+                .uid),
+        }
+    }
+
+    /// Returns the gid of the group in the attribute
+    /// If a numeric gid is stored, return it.
+    /// If the system has no group with the stored name, return TheseusError::MissingGroup
+    /// If no group;gid is stored, return the current group
+    pub fn get_gid(&self) -> Result<Gid, TheseusError> {
+        if self.grp.is_none() {
+            return Ok(getgid());
+        }
+        let grp = self.grp.as_ref().unwrap();
+        match num_if(grp, 10) {
+            /* A gid */
+            Some(uid) => Ok(Gid::from_raw(uid)),
+            /* A group name */
+            None => Ok(Group::from_name(grp)
+                .map_err(|e| TheseusError::GetGrp(e.to_string()))?
+                .ok_or(TheseusError::MissingGrp(grp.to_owned()))?
+                .gid),
+        }
+    }
+
+    /// Returns the mode in the attribute
+    /// If no mode is specified, returns `0o600` as the mode
+    pub fn get_mode(&self) -> Mode {
+        match self.mode {
+            Some(m) => m,
+            None => Mode::from_bits_truncate(0o600),
+        }
+    }
+}
+
+impl Display for Attributes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let m = match self.mode {
+            Some(m) => mode_to_string(m),
+            None => "*".into(),
+        };
+        write!(
+            f,
+            "{}:{}:{}",
+            self.own.as_ref().map_or("*", |o| o),
+            self.grp.as_ref().map_or("*", |g| g),
+            m,
+        )
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct DirTarget {
     path: PathBuf,
+    attr: Attributes,
     created: bool,
 }
 
 impl DirTarget {
     /// Create a new DirTarget from a path
-    /// Returns `None` if `dir` is not an absolute path
+    /// Returns `None` if `dir` is not an absolute path or is empty
     pub fn new(dir: &Path) -> Option<DirTarget> {
+        if dir.is_empty() {
+            return None;
+        }
+
+        let mut dit = dir.to_str().expect("Utf-8 path").split(':').peekable();
+        /* Unwrap safe since split must have at least one element */
+        let path = PathBuf::from(dit.next().unwrap());
+        let attr = match dit.peek() {
+            Some(_) => Attributes::parse(dit),
+            None => Attributes::unspecified(),
+        };
         match dir.is_absolute() {
             true => Some(Self {
-                path: dir.to_owned(),
+                path,
+                attr,
                 created: false,
             }),
             false => None,
@@ -107,6 +221,7 @@ impl PlanItem<()> for DirTarget {
         if self.path.exists() && self.path.is_dir() {
             return Ok(Self {
                 path: self.path,
+                attr: self.attr,
                 created: false,
             });
         }
@@ -115,6 +230,7 @@ impl PlanItem<()> for DirTarget {
         debug!("created {}", self.path.display());
         Ok(DirTarget {
             path: self.path,
+            attr: self.attr,
             created: true,
         })
     }
@@ -135,9 +251,7 @@ impl PlanItem<()> for DirTarget {
 pub struct FileTarget {
     src: PathBuf,
     dst: PathBuf,
-    own: String,
-    grp: String,
-    mode: Mode,
+    attr: Attributes,
     saved: bool,
 }
 
@@ -145,28 +259,11 @@ impl Display for FileTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "FileTarget{{ {}, {}, {}, {}, {}}}",
+            "FileTarget{{ {}, {}, attr: {}}}",
             self.src.display(),
             self.dst.display(),
-            self.own,
-            self.grp,
-            mode_to_string(self.mode),
+            self.attr,
         )
-    }
-}
-
-impl Serialize for FileTarget {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&format!(
-            "{}:{}:{}:{}",
-            self.dst.display(),
-            self.own,
-            self.grp,
-            mode_to_string(self.mode),
-        ))
     }
 }
 
@@ -187,37 +284,27 @@ impl FileTarget {
     pub fn parse(src: &Path, s: &str) -> Result<Self, TheseusError> {
         let src = path::absolute(PathBuf::from(src))
             .map_err(|e| TheseusError::Absolute(src.display().to_string(), e.to_string()))?;
-        let mut rst = s.split(':');
+        let mut rst = s.split(':').peekable();
         let dst = path::absolute(
             rst.next()
                 .ok_or(TheseusError::MissingDst(s.to_string()))
                 .map(|t| PathBuf::from(t.replace('_', "/")))?,
         )
         .map_err(|e| TheseusError::Absolute(src.display().to_string(), e.to_string()))?;
-        let own = rst
-            .next()
-            .ok_or(TheseusError::MissingOwn(s.to_string()))?
-            .to_string();
-        let grp = rst
-            .next()
-            .ok_or(TheseusError::MissingGid(s.to_string()))?
-            .to_string();
-        let mode = rst
-            .next()
-            .ok_or(TheseusError::MissingPrm(s.to_string()))
-            .map(string_to_mode)??;
+        let attr = match rst.peek() {
+            Some(_) => Attributes::parse(rst),
+            None => Attributes::unspecified(),
+        };
         trace!("read target {}", src.display());
         Ok(Self {
             src,
             dst,
-            own,
-            grp,
-            mode,
+            attr,
             saved: false,
         })
     }
 
-    /// Read a DirTarget from a path
+    /// Read a FileTarget from a path
     /// `p` is a local path, like ./bin/sh:root:root:755
     /// The destination is `/bin/sh`
     pub fn from_path(p: &Path, prefix: &Path) -> Result<Self, TheseusError> {
@@ -234,52 +321,31 @@ impl FileTarget {
             .ok_or(TheseusError::MissingFilename(p.display().to_string()))?
             .to_string_lossy()
             .into_owned();
-        let mut rst = rst_t.split(':');
+        let mut rst = rst_t.split(':').peekable();
         let dst_fname = rst
             .next()
             .ok_or(TheseusError::MissingDst(p.display().to_string()))?;
-        let own = rst
-            .next()
-            .ok_or(TheseusError::MissingOwn(p.display().to_string()))?
-            .to_string();
-        let grp = rst
-            .next()
-            .ok_or(TheseusError::MissingGid(p.display().to_string()))?
-            .to_string();
-        let mode = rst
-            .next()
-            .ok_or(TheseusError::MissingPrm(p.display().to_string()))
-            .map(string_to_mode)??;
+        let attr = match rst.peek() {
+            Some(_) => Attributes::parse(rst),
+            None => Attributes::unspecified(),
+        };
         trace!("read target {}", src.display());
 
         let dst = PathBuf::from("/").join(dst_aparent).join(dst_fname);
         Ok(Self {
             src,
             dst,
-            own,
-            grp,
-            mode,
+            attr,
             saved: false,
         })
     }
 
-    /// Get uid/gid of DirTarget
-    /// If stored user/group are uid/gid, then return them. Otherwise, find the
-    /// uid/gid associated with the user/group
+    /// Get uid/gid of a FileTarget
+    /// If stored user/group are uid/gid, then return them.
+    /// If they are names, find the associated uids/gids
+    /// Otherwise, use the current user/group
     fn ids(&self) -> Result<(Uid, Gid), TheseusError> {
-        if let (Some(uid), Some(gid)) = (num_if(&self.own, 10), num_if(&self.grp, 10)) {
-            Ok((uid.into(), gid.into()))
-        } else {
-            let uid = User::from_name(&self.own)
-                .map_err(|e| TheseusError::GetUser(e.to_string()))?
-                .ok_or(TheseusError::MissingUser(self.own.to_owned()))?
-                .uid;
-            let gid = Group::from_name(&self.grp)
-                .map_err(|e| TheseusError::GetGrp(e.to_string()))?
-                .ok_or(TheseusError::MissingGrp(self.grp.to_owned()))?
-                .gid;
-            Ok((uid, gid))
-        }
+        Ok((self.attr.get_uid()?, self.attr.get_gid()?))
     }
 }
 
@@ -290,7 +356,7 @@ fn compute_save(p: &Path, prefix: Option<&Path>) -> Result<Option<FileTarget>, T
     }
     let prefix = prefix.unwrap();
     let st = nix::sys::stat::stat(p)
-        .map_err(|e| TheseusError::Stat(p.display().to_string(), e.to_string()))?;
+        .map_err(|e| TheseusError::Stat(e.to_string(), p.to_string_lossy().into_owned()))?;
     let dst = path::absolute(p)
         .map_err(|e| TheseusError::Absolute(p.display().to_string(), e.to_string()))?;
     let own = User::from_uid(st.st_uid.into())
@@ -305,9 +371,11 @@ fn compute_save(p: &Path, prefix: Option<&Path>) -> Result<Option<FileTarget>, T
     Ok(Some(FileTarget {
         src,
         dst,
-        own,
-        grp,
-        mode,
+        attr: Attributes {
+            own: Some(own),
+            grp: Some(grp),
+            mode: Some(mode),
+        },
         saved: true,
     }))
 }
@@ -321,14 +389,14 @@ impl PlanItem<Path> for FileTarget {
 
         let save = compute_save(&self.dst, savepath)?;
         if let Some(save) = save.as_ref() {
-            /* Unwrap safe here */
             copy(&self.dst, &save.src)
                 .map_err(|e| TheseusError::Copy(save.src.display().to_string(), e.kind()))?;
         }
         copy(&self.src, &self.dst)
             .map_err(|e| TheseusError::Copy(self.src.display().to_string(), e.kind()))?;
 
-        fchmodat(None, &self.src, self.mode, FchmodatFlags::FollowSymlink)
+        let m = self.attr.get_mode();
+        fchmodat(None, &self.src, m, FchmodatFlags::FollowSymlink)
             .map_err(|e| TheseusError::Chmod(self.src.display().to_string(), e.to_string()))?;
 
         chown(&self.src, Some(uid), Some(gid))
@@ -376,6 +444,7 @@ impl HasDeps<Path, ()> for FileTarget {
             .ancestors()
             .map(|a| DirTarget {
                 path: a.to_owned(),
+                attr: Attributes::from_path(a).unwrap_or_else(|e| panic!("Err: {e}")),
                 created: false,
             })
             .collect::<Vec<_>>()
@@ -384,6 +453,8 @@ impl HasDeps<Path, ()> for FileTarget {
 
 impl DependentPlan<(), Path, DirTarget, Vec<DirTarget>, FileTarget> for Vec<FileTarget> {
     fn dependencies(&self) -> Vec<DirTarget> {
+        /* Dependency trees should be small, so performance doesn't really matter */
+        /* But still, vec + sort + dedup is probably faster than ordered set for small data */
         let mut deps: Vec<_> = self.iter().flat_map(|ft| ft.dependencies()).collect();
         deps.sort();
         deps.dedup();

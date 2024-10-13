@@ -12,17 +12,19 @@
 
 use std::{
     collections::HashMap,
-    io::Write,
+    fmt::Debug,
     net::{IpAddr, Ipv4Addr, TcpStream},
     path::{Path, PathBuf},
-    process::{self, Output},
+    process::{self, Output, Stdio},
 };
 
 use anyhow::{anyhow, bail, Context, Result};
 // TODO: Use Argh because it seems nicer and produces smaller binaries
 use clap::{CommandFactory, Parser, Subcommand};
+use nix::sys::stat::Mode;
 use openssh::{KnownHosts, Session};
 use tracing::{debug, error, info, instrument, trace};
+use walkdir::WalkDir;
 
 use theseus::{
     ball::*, error::*, is_golem, msg::*, plan::DependentPlan, target::*, TheseusPlatform,
@@ -34,13 +36,17 @@ struct WizardArgs {
     /// Verbosity level 0-4
     #[arg(short, action=clap::ArgAction::Count, global=true)]
     verbose: u8,
+    /// Comma separated list of paths to search for golems
+    #[arg(short, value_delimiter = ',', num_args=1..)]
+    golem_paths: Vec<String>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Apply the plan on a remote theseus server
+    /// Apply a plan on a machine
     Apply {
         /// Address of theseus server
         #[arg(short, required = true)]
@@ -58,6 +64,7 @@ enum Command {
         #[arg(short, default_value = "root")]
         username: String,
     },
+
     /// Validate a plan
     Validate {
         /// Directory containing a plan
@@ -82,6 +89,38 @@ enum Command {
 
     /// List available golems
     ListGolems {},
+
+    /// Change the target user/group of a path
+    /// Append -R to recurse
+    Chown {
+        /// Recurse
+        #[arg(short = 'R', default_value = "false")]
+        recurse: bool,
+
+        /// Target user:group
+        #[arg(required = true)]
+        usergroup: String,
+
+        /// Target
+        #[arg(required = true)]
+        path: PathBuf,
+    },
+
+    /// Change the target mode of a path
+    /// Append -R to recurse
+    Chmod {
+        /// Recurse
+        #[arg(short = 'R', default_value = "false")]
+        recurse: bool,
+
+        /// Target mode
+        #[arg(required = true)]
+        mode: String,
+
+        /// Target
+        #[arg(required = true)]
+        path: PathBuf,
+    },
 }
 
 /// Reads a plan from a directory and checks for errors
@@ -91,15 +130,63 @@ fn validate_plan(dir: &Path) -> Result<Vec<FileTarget>, TheseusError> {
     plan_from_root(dir)
 }
 
-fn find_golems() -> Result<HashMap<TheseusPlatform, PathBuf>> {
+/// Replace `p` with `f p`.
+/// If `r` is true, do this recursively
+fn path_map(f: impl Fn(&str) -> anyhow::Result<String>, p: &Path, r: bool) -> anyhow::Result<()> {
+    trace!(
+        "{}path map {}",
+        if r { "recursive " } else { "" },
+        p.display(),
+    );
+
+    for e in WalkDir::new(p).contents_first(false) {
+        let e = e?;
+        let ne = f(e
+            .path()
+            .to_str()
+            .unwrap_or_else(|| panic!("{} is not UTF-8", p.display())))?;
+
+        trace!("rename {} to {ne}", e.path().display());
+        std::fs::rename(e.path(), ne)?;
+    }
+    Ok(())
+}
+
+/// Replace `owner:group` in p with `own:grp`
+fn pchown(own: &str, grp: &str, p: &str) -> anyhow::Result<String> {
+    let mut ps = p.split(':');
+    let nm = ps
+        .next()
+        .ok_or(TheseusError::MissingFilename(p.to_string()))?;
+    let mut attr = Attributes::parse(ps);
+    attr.own = Some(own.to_owned());
+    attr.grp = Some(grp.to_owned());
+
+    Ok(nm.to_owned() + ":" + &attr.to_string())
+}
+
+/// Replace `mode` in p with `mode`
+fn pchmod(mode: Mode, p: &str) -> anyhow::Result<String> {
+    let mut ps = p.split(':');
+    let nm = ps
+        .next()
+        .ok_or(TheseusError::MissingFilename(p.to_string()))?;
+    let mut attr = Attributes::parse(ps);
+    attr.mode = Some(mode);
+
+    Ok(nm.to_owned() + ":" + &attr.to_string())
+}
+
+fn find_golems(
+    search_paths: impl Iterator<Item = String>,
+) -> Result<HashMap<TheseusPlatform, PathBuf>> {
     // TODO: better
-    let search_paths = [
-        env!("CARGO_TARGET_DIR"),
-        "/var/lib/theseus/golems",
-        "./data/golems",
-    ];
+    let search_paths = search_paths.chain([
+        "/var/lib/theseus/golems".to_owned(),
+        "./data/golems".to_owned(),
+    ]);
     let mut golems = HashMap::new();
-    for sp in search_paths.iter().filter(|p| Path::new(p).exists()) {
+    for sp in search_paths.filter(|p| Path::new(p).exists()) {
         debug!("Looking for golem in {sp}");
         for ent in std::fs::read_dir(sp)? {
             let ent = ent?;
@@ -149,7 +236,133 @@ fn copy_golem_to(
     Ok(out)
 }
 
-#[derive(Debug)]
+trait Golem: std::io::Read + std::io::Write {
+    /// Instruct the golem to apply the currently loaded plan
+    fn apply_plan(&mut self) -> anyhow::Result<()> {
+        let rsp = GolemRequest::Apply.write(self)?;
+        match rsp {
+            Ok(()) => info!("plan applied successfully!"),
+            Err(ge) => match ge {
+                GolemError::BallExists => unreachable!(),
+                GolemError::BallChecksum => unreachable!(),
+                GolemError::ServerError(e) => error!("Golem internal error: {e}"),
+                GolemError::DependencyError(e) => error!("Golem dependency error: {e}"),
+                GolemError::PlanError(e) => error!("Golem plan error: {e}"),
+                GolemError::InvalidRequest => error!("Transmission error!"),
+            },
+        }
+        Ok(())
+    }
+
+    /// Send the golem a new Ball
+    fn upload(&mut self, ball_md: (BallMd, Vec<u8>)) -> anyhow::Result<()> {
+        let (md, ball) = ball_md;
+
+        info!("send ballmd {}", md);
+
+        let recv_err = GolemRequest::Receive(md)
+            .write(self)
+            .map_err(|e| TheseusError::WriteRequest(e.to_string()))?
+            .inspect(|_| info!("ok to transmit"));
+        match recv_err {
+            Ok(_) => {
+                trace!("Want to write {}", ball.len());
+                self.write_all(&ball)
+                    .map_err(|e| TheseusError::WriteBall(e.to_string()))?;
+            }
+            Err(GolemError::BallExists) => {
+                info!("No need to transmit, ball exists");
+                return Ok(());
+            }
+            Err(e) => return Err(e).context("sending receive request"),
+        }
+
+        Ok(Result::<(), GolemError>::read(self)??)
+    }
+
+    /// Kill the golem
+    fn kill(self: Box<Self>) -> anyhow::Result<()>;
+}
+
+struct LocalGolem {
+    stream: TcpStream,
+    golem: std::process::Child,
+}
+
+impl LocalGolem {
+    fn construct(port: u16, golem_paths: impl Iterator<Item = String>) -> Result<Self> {
+        /* Panic if current platform not supported */
+        let platform = TheseusPlatform::new(current_platform::CURRENT_PLATFORM).unwrap();
+        debug!("Looking for golems for {platform}");
+        let golems = find_golems(golem_paths).context("while finding golems")?;
+        let golem_path = golems.get(&platform).ok_or(anyhow!("no golems found"))?;
+        debug!("Found golem at {}", golem_path.display());
+
+        info!("Copying golem to /tmp/thesesug");
+        std::fs::copy(golem_path, Path::new("/tmp/theseusg")).context("copying golem")?;
+        debug!("Copied");
+
+        info!("Starting golem",);
+        let golem = std::process::Command::new("/tmp/theseusg")
+            .args(["-vvvv"])
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .context("while spawning golem")?;
+        debug!("Started");
+
+        info!("Connecting to golem");
+        let mut stream = std::net::TcpListener::bind(("localhost", port))
+            .context("bind to localhost:{port}")?
+            .accept()
+            .context("accept connection")?
+            .0;
+        debug!("Connected");
+
+        info!("Testing golem communication");
+        GolemRequest::Ping
+            .write(&mut stream)
+            .context("while pinging golem")?
+            .context("in response to ping")?;
+        debug!("Communication working");
+
+        Ok(Self { stream, golem })
+    }
+}
+
+impl std::io::Read for LocalGolem {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.stream.read(buf)
+    }
+}
+
+impl std::io::Write for LocalGolem {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.stream.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stream.flush()
+    }
+}
+
+impl Golem for LocalGolem {
+    fn kill(mut self: Box<Self>) -> anyhow::Result<()> {
+        info!("Killing golem");
+        GolemRequest::Kill
+            .write(&mut self.stream)
+            .context("while sending golem kill")?
+            .unwrap_or_else(|e| error!("Golem refuses to die because: {}", e));
+        debug!("Killed");
+
+        self.golem.wait()?;
+        // self.golem.kill()?;
+
+        Ok(())
+    }
+}
+
 struct RemoteGolem {
     session: Session,
     stream: TcpStream,
@@ -157,7 +370,12 @@ struct RemoteGolem {
 }
 
 impl RemoteGolem {
-    async fn construct(host: &str, user: &str, port: u16) -> Result<Self> {
+    async fn construct(
+        host: &str,
+        user: &str,
+        port: u16,
+        golem_paths: impl Iterator<Item = String>,
+    ) -> Result<Self> {
         info!("Establishing session with {host}");
         let mut session =
             Session::connect_mux(format!("{user}@{host}"), KnownHosts::Strict).await?;
@@ -170,7 +388,7 @@ impl RemoteGolem {
         info!("Platform is {platform}");
 
         debug!("Looking for golems for {platform}");
-        let golems = find_golems().context("while finding golems")?;
+        let golems = find_golems(golem_paths).context("while finding golems")?;
         let golem_path = golems.get(&platform).ok_or(anyhow!("no golems found"))?;
         debug!("Found golem at {}", golem_path.display());
 
@@ -197,11 +415,12 @@ impl RemoteGolem {
         /* Give the golem some time to startup */
         std::thread::sleep(std::time::Duration::from_millis(100_u64));
 
-        info!("Forwarding local port {port} to remote port {port}");
+        info!("Forwarding remote port {port} to local port {port}");
         let (fwt, fwsck) = (
-            openssh::ForwardType::Local,
+            openssh::ForwardType::Remote,
             std::net::SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port),
         );
+
         session
             .request_port_forward(
                 fwt,
@@ -212,8 +431,12 @@ impl RemoteGolem {
             .context("while requesting port forward")?;
         debug!("Forwarded");
 
-        info!("Connecting to golem");
-        let mut stream = TcpStream::connect(("localhost", port)).context("connecting to golem")?;
+        info!("Waiting for golem to connect");
+        let mut stream = std::net::TcpListener::bind(("localhost", port))
+            .context("bind to localhost:{port}")?
+            .accept()
+            .context("accept connection")?
+            .0;
         debug!("Connected");
 
         info!("Testing golem communication");
@@ -257,8 +480,25 @@ impl RemoteGolem {
             Err(anyhow!(TheseusError::Platform(out.to_string())))
         }
     }
+}
 
-    async fn kill(mut self) -> Result<()> {
+impl std::io::Read for RemoteGolem {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.stream.read(buf)
+    }
+}
+impl std::io::Write for RemoteGolem {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.stream.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stream.flush()
+    }
+}
+
+impl Golem for RemoteGolem {
+    fn kill(mut self: Box<Self>) -> anyhow::Result<()> {
         info!("Killing golem");
         GolemRequest::Kill
             .write(&mut self.stream)
@@ -268,62 +508,34 @@ impl RemoteGolem {
 
         info!("Closing port forward");
         let (fwt, fwsck) = self.forward;
-        self.session.close_port_forward(fwt, fwsck, fwsck).await?;
+        futures::executor::block_on(self.session.close_port_forward(fwt, fwsck, fwsck))?;
         debug!("Closed");
 
         info!("Closing session");
-        self.session.close().await?;
+        futures::executor::block_on(self.session.close())?;
         debug!("Closed");
 
-        Ok(())
-    }
-
-    fn upload(&mut self, ball_md: (BallMd, Vec<u8>)) -> anyhow::Result<()> {
-        let (md, ball) = ball_md;
-
-        info!("send ballmd {}", md);
-
-        let recv_err = GolemRequest::Receive(md)
-            .write(&mut self.stream)
-            .map_err(|e| TheseusError::WriteRequest(e.to_string()))?
-            .inspect(|_| info!("ok to transmit"));
-        match recv_err {
-            Ok(_) => {
-                trace!("Want to write {}", ball.len());
-                self.stream
-                    .write_all(&ball)
-                    .map_err(|e| TheseusError::WriteBall(e.to_string()))?;
-            }
-            Err(GolemError::BallExists) => {
-                info!("No need to transmit, ball exists");
-                return Ok(());
-            }
-            Err(e) => return Err(e).context("sending receive request"),
-        }
-
-        Ok(Result::<(), GolemError>::read(&mut self.stream)??)
-    }
-
-    /// Instruct the golem to apply the currently loaded plan
-    fn apply_plan(&mut self) -> anyhow::Result<()> {
-        info!("Connected!");
-        let rsp = GolemRequest::Apply.write(&mut self.stream)?;
-        match rsp {
-            Ok(()) => info!("plan applied successfully!"),
-            Err(ge) => match ge {
-                GolemError::BallExists => unreachable!(),
-                GolemError::BallChecksum => unreachable!(),
-                GolemError::ServerError(e) => error!("Golem internal error: {e}"),
-                GolemError::DependencyError(e) => error!("Golem dependency error: {e}"),
-                GolemError::PlanError(e) => error!("Golem plan error: {e}"),
-                GolemError::InvalidRequest => error!("Transmission error!"),
-            },
-        }
         Ok(())
     }
 }
 
-async fn try_main(args: WizardArgs) -> anyhow::Result<()> {
+fn construct_golem(
+    addr: &str,
+    user: &str,
+    port: u16,
+    golem_paths: impl Iterator<Item = String>,
+) -> anyhow::Result<Box<dyn Golem>> {
+    match addr {
+        "localhost" | "127.0.0.1" => Ok(Box::new(LocalGolem::construct(port, golem_paths)?)),
+        _ => Ok(Box::new(futures::executor::block_on(
+            RemoteGolem::construct(addr, user, port, golem_paths),
+        )?)),
+    }
+}
+
+async fn try_main() -> anyhow::Result<()> {
+    let args = WizardArgs::try_parse()?;
+
     let tracer = tracing_subscriber::fmt()
         .without_time()
         .compact()
@@ -352,7 +564,8 @@ async fn try_main(args: WizardArgs) -> anyhow::Result<()> {
             port,
             dir,
         }) => {
-            let mut golem = RemoteGolem::construct(&address, &username, port).await?;
+            let mut golem =
+                construct_golem(&address, &username, port, args.golem_paths.into_iter())?;
 
             let _plan_valid = validate_plan(&dir)?;
             let ball = dir_to_ball(&dir)?;
@@ -360,7 +573,7 @@ async fn try_main(args: WizardArgs) -> anyhow::Result<()> {
             golem.upload((md, ball))?;
             golem.apply_plan()?;
 
-            golem.kill().await?;
+            golem.kill()?;
             Ok(())
         }
 
@@ -369,28 +582,52 @@ async fn try_main(args: WizardArgs) -> anyhow::Result<()> {
             username,
             port,
         }) => {
-            let golem = RemoteGolem::construct(&address, &username, port).await?;
+            let golem = construct_golem(&address, &username, port, args.golem_paths.into_iter())?;
 
-            golem.kill().await?;
+            golem.kill()?;
             Ok(())
         }
         Some(Command::ListGolems {}) => {
             println!("Found golems for");
-            find_golems()?.keys().for_each(|p| println!("\t{p}"));
+            find_golems(args.golem_paths.into_iter())?
+                .keys()
+                .for_each(|p| println!("\t{p}"));
             Ok(())
         }
+        Some(Command::Chown {
+            recurse,
+            usergroup,
+            path,
+        }) => {
+            let ug: Vec<_> = usergroup.split(':').take(2).collect();
+            let (user, group) = (
+                ug.first().expect("Missing user").to_string(),
+                ug.get(1).expect("Missing group").to_string(),
+            );
 
-        _ => WizardArgs::command().print_help().context("no arguments"),
+            path_map(|p| pchown(&user, &group, p), &path, recurse)
+        }
+        Some(Command::Chmod {
+            recurse,
+            mode,
+            path,
+        }) => {
+            let mode = string_to_mode(&mode)?;
+
+            path_map(|p| pchmod(mode, p), &path, recurse)
+        }
+
+        _ => WizardArgs::command()
+            .print_help()
+            .context("no / unknown args"),
     }
 }
 
 #[instrument]
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let args = WizardArgs::parse();
-
-    match try_main(args).await {
+    match try_main().await {
         Ok(_) => {}
-        Err(e) => eprintln!("{e:#}"),
+        Err(e) => eprintln!("{e:?}"),
     }
 }

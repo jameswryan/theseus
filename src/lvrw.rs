@@ -12,13 +12,13 @@
 
 use std::mem::size_of;
 
-pub fn lvw(w: &mut impl std::io::Write, val: &[u8]) -> std::io::Result<()> {
+pub fn lvw<W: std::io::Write + ?Sized>(w: &mut W, val: &[u8]) -> std::io::Result<()> {
     let len_bytes = (val.len() as u64).to_le_bytes();
     w.write_all(&len_bytes)?;
     w.write_all(val)
 }
 
-pub fn lvr(r: &mut impl std::io::Read) -> std::io::Result<Vec<u8>> {
+pub fn lvr<R: std::io::Read + ?Sized>(r: &mut R) -> std::io::Result<Vec<u8>> {
     let mut len_bytes = [0u8; size_of::<u64>()];
     r.read_exact(&mut len_bytes)?;
     let len = u64::from_le_bytes(len_bytes);
