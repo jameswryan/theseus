@@ -408,13 +408,13 @@ impl PlanItem<Path> for FileTarget {
     fn unwind(&self) {
         /* Remove emplaced file */
         nix::unistd::unlink(&self.dst)
-            .unwrap_or_else(|_| panic!("Can remove written {}", self.src.display()));
+            .unwrap_or_else(|_| panic!("remove written {}", self.src.display()));
 
         /* Only need to restore if src was saved */
         if self.saved {
             copy(&self.src, &self.dst).unwrap_or_else(|e| {
                 panic!(
-                    "can copy {} to {}: {}",
+                    "copy {} to {}: {}",
                     self.dst.display(),
                     self.src.display(),
                     e
@@ -437,14 +437,15 @@ impl HasDeps<Path, ()> for FileTarget {
             "{} is an absolute path",
             self.dst.display()
         );
-
         self.dst
             .parent()
             .unwrap_or_else(|| panic!("{} is not root", self.dst.display()))
             .ancestors()
             .map(|a| DirTarget {
                 path: a.to_owned(),
-                attr: Attributes::from_path(a).unwrap_or_else(|e| panic!("Err: {e}")),
+                attr: Attributes::parse(
+                    a.to_str().expect("Only UTF-8 paths").split(':').peekable(),
+                ),
                 created: false,
             })
             .collect::<Vec<_>>()

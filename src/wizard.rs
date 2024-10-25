@@ -22,7 +22,7 @@ use anyhow::{anyhow, bail, Context, Result};
 // TODO: Use Argh because it seems nicer and produces smaller binaries
 use clap::{CommandFactory, Parser, Subcommand};
 use nix::sys::stat::Mode;
-use openssh::{KnownHosts, Session};
+use openssh::{KnownHosts, Session, SessionBuilder};
 use tracing::{debug, error, info, instrument, trace};
 use walkdir::WalkDir;
 
@@ -377,8 +377,10 @@ impl RemoteGolem {
         golem_paths: impl Iterator<Item = String>,
     ) -> Result<Self> {
         info!("Establishing session with {host}");
-        let mut session =
-            Session::connect_mux(format!("{user}@{host}"), KnownHosts::Strict).await?;
+        let mut session = SessionBuilder::default()
+            .known_hosts_check(KnownHosts::Strict)
+            .connect_mux(format!("{user}@{host}"))
+            .await?;
         debug!("Session established");
 
         info!("Getting {host} platform");
@@ -397,24 +399,6 @@ impl RemoteGolem {
             .context("copying golem")?;
         debug!("Copied");
 
-        info!("Starting golem on {host}",);
-        // In theory it would be nice to keep a handle to the golem. However,
-        // we can't actually kill it properly. Instead, we can use our stream
-        // to send it a 'Kill' request when we're finished
-        session
-            .command("/tmp/theseusg")
-            .args(["-vvvv"])
-            .spawn()
-            .await
-            .context("while spawning golem")?
-            .disconnect()
-            .await
-            .context("while disconnecting from golem")?;
-        debug!("Started");
-
-        /* Give the golem some time to startup */
-        std::thread::sleep(std::time::Duration::from_millis(100_u64));
-
         info!("Forwarding remote port {port} to local port {port}");
         let (fwt, fwsck) = (
             openssh::ForwardType::Remote,
@@ -430,6 +414,21 @@ impl RemoteGolem {
             .await
             .context("while requesting port forward")?;
         debug!("Forwarded");
+
+        info!("Starting golem on {host}",);
+        // In theory it would be nice to keep a handle to the golem. However,
+        // we can't actually kill it properly. Instead, we can use our stream
+        // to send it a 'Kill' request when we're finished
+        session
+            .command("/tmp/theseusg")
+            .args(["-vvvv"])
+            .spawn()
+            .await
+            .context("while spawning golem")?
+            .disconnect()
+            .await
+            .context("while disconnecting from golem")?;
+        debug!("Started");
 
         info!("Waiting for golem to connect");
         let mut stream = std::net::TcpListener::bind(("localhost", port))
@@ -624,7 +623,7 @@ async fn try_main() -> anyhow::Result<()> {
 }
 
 #[instrument]
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main]
 async fn main() {
     match try_main().await {
         Ok(_) => {}
