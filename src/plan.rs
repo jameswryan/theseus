@@ -84,10 +84,4 @@ pub trait DependentPlan<
     /// Dependencies of a plan are the union of the dependencies of the items
     /// in the plan
     fn dependencies(&self) -> impl IntoIterator<Item = Item::Dep>;
-
-    /// Print the dependencies of this plan
-    fn print_deps(&self) {
-        let deps = self.dependencies().into_iter();
-        deps.for_each(|dep| println!("{}", dep.identify()))
-    }
 }

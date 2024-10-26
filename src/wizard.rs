@@ -27,7 +27,13 @@ use tracing::{debug, error, info, instrument, trace};
 use walkdir::WalkDir;
 
 use theseus::{
-    ball::*, error::*, is_golem, msg::*, plan::DependentPlan, target::*, TheseusPlatform,
+    ball::*,
+    error::*,
+    is_golem,
+    msg::*,
+    plan::{DependentPlan, PlanItem},
+    target::*,
+    TheseusPlatform,
 };
 
 #[derive(Debug, Parser)]
@@ -397,6 +403,12 @@ impl RemoteGolem {
         info!("Copying golem to {host}",);
         copy_golem_to(&(host, user), golem_path, Path::new("/tmp/theseusg"))
             .context("copying golem")?;
+        session
+            .command("chmod")
+            .args(["+x", "/tmp/theseusg"])
+            .output()
+            .await
+            .context("chmod golem")?;
         debug!("Copied");
 
         info!("Forwarding remote port {port} to local port {port}");
@@ -552,8 +564,12 @@ async fn try_main() -> anyhow::Result<()> {
         Some(Command::Validate { dir }) => {
             let plan = validate_plan(Path::new(&dir))?;
             println!("Plan {} is valid", &dir);
-            println!("Depends on: ");
-            plan.print_deps();
+            println!("Contains");
+            plan.iter().for_each(|it| println!("\t{}", it.identify()));
+            println!("Depends on");
+            plan.dependencies()
+                .iter()
+                .for_each(|dep| println!("\t{}", dep.identify()));
             Ok(())
         }
 
