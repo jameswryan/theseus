@@ -13,6 +13,7 @@
 use std::{fmt::Display, str::FromStr};
 
 pub mod ball;
+pub mod crypto;
 pub mod error;
 pub mod lvrw;
 pub mod msg;

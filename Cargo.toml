@@ -1,6 +1,6 @@
 [package]
 name = "theseus"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 
 [dependencies]
@@ -14,8 +14,8 @@ openssh = { version = "0.11.2", features = ["process-mux", "native-mux"] }
 postcard = { version = "1.0.10", default-features = false, features = ["use-std", "alloc"] }
 serde = { version = "1.0.210", default-features = false, features = ["serde_derive", "default", "alloc"] }
 serde_bytes = { version = "0.11.15", default-features = false }
-sha3 = { version = "0.10.8", default-features = false , features = ["std"]}
 snap = "1.1.1"
+subtle = { version = "2.6.1", features = ["const-generics"] }
 tar = { version = "0.4.41", default-features = false }
 thiserror = { version = "1.0.63", default-features = false }
 tokio = { version = "1.40.0", features = ["rt", "rt-multi-thread"] }
@@ -23,6 +23,7 @@ tracing = { version = "0.1.40", features = ["log"] }
 tracing-subscriber = "0.3.18"
 trait-variant = "0.1.2"
 walkdir = "2.5.0"
+xoodyak = "0.8.4"
 
 [[bin]]
 name = "theseusg"

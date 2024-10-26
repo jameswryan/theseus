@@ -13,36 +13,27 @@
 use std::{fmt::Display, io::Write, path::Path};
 
 use serde::{Deserialize, Serialize};
-use sha3::Digest;
 
+use crate::crypto::*;
 use crate::error::TheseusError;
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Copy, Clone)]
 pub struct BallMd {
     pub size: u64,
-    #[serde(with = "serde_bytes")]
-    pub checksum: [u8; 32],
+    pub checksum: TheseusChecksum,
 }
 
 impl BallMd {
     pub fn new(ball: &[u8]) -> Self {
         let size = ball.len() as u64;
-        // TODO: does 32 really need to be in 3 places?
-        let mut checksum = [0; 32];
-        let _ck = sha3::Sha3_256::digest(ball);
-        checksum.copy_from_slice(&_ck);
+        let checksum = crypto_checksum(ball);
         Self { size, checksum }
     }
 }
 
 impl Display for BallMd {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // TODO: does 32 really need to be in 3 places?
-        write!(
-            f,
-            "{}",
-            faster_hex::hex_string::<{ 32 * 2 }>(&self.checksum)
-        )
+        write!(f, "{}", self.checksum)
     }
 }
 

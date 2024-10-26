@@ -10,13 +10,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::io::Read;
 use std::{io::Write, net::TcpStream, os::unix::fs::OpenOptionsExt, path::PathBuf};
 
 use clap::Parser;
 use tracing::{debug, error, info, trace, warn};
 
-use sha3::{Digest, Sha3_256};
 use theseus::ball::*;
+use theseus::crypto::*;
 use theseus::error::*;
 use theseus::msg::*;
 use theseus::plan::*;
@@ -174,23 +175,18 @@ impl Golem {
 
         /* Check whether ball with that hash exists */
         if tpath.exists() {
-            let mut hasher = Sha3_256::new();
+            let mut tfb = Vec::new();
             let mut tf =
                 std::fs::File::open(&tpath).map_err(|e| GolemError::ServerError(e.to_string()))?;
-            std::io::copy(&mut tf, &mut hasher)
+            tf.read_to_end(&mut tfb)
                 .map_err(|e| GolemError::ServerError(e.to_string()))?;
-            /* TODO: Why do we just happen to know that this is 32 bytes? */
-            let mut ck = [0u8; 32];
-            let mut _ck = hasher.finalize();
-            ck.copy_from_slice(&_ck);
+            let ck = crypto_checksum(&tfb);
 
-            /* WARN: Not constant time, but that's ok */
             if ck == md.checksum {
-                /* BIKESHED: This isn't really an error */
                 return Err(GolemError::BallExists);
             }
 
-            warn!("ball at {} corrupted, checksum is {:?}", tname, _ck);
+            warn!("ball at {} corrupted, checksum is {:?}", tname, ck);
             warn!("Accepting new ball");
         }
 
@@ -216,12 +212,8 @@ impl Golem {
             .map_err(|e| GolemError::ServerError(e.to_string()))?;
 
         /* Verify checksum */
-        /* TODO: Why do we just happen to know that this is 32 bytes? */
-        let mut ck = [0; 32];
-        let _ck = Sha3_256::digest(&buf[..]);
-        ck.copy_from_slice(&_ck);
+        let ck = crypto_checksum(&buf[..]);
 
-        /* WARN: Not constant time, but that's ok */
         if ck != md.checksum {
             return Err(GolemError::BallChecksum);
         }
