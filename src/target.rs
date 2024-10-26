@@ -308,6 +308,9 @@ impl FileTarget {
     /// `p` is a local path, like ./bin/sh:root:root:755
     /// The destination is `/bin/sh`
     pub fn from_path(p: &Path, prefix: &Path) -> Result<Self, TheseusError> {
+        if !p.try_exists()? {
+            return Err(TheseusError::PathExist(p.to_string_lossy().to_string()));
+        }
         let src = path::absolute(PathBuf::from(p))
             .map_err(|e| TheseusError::Absolute(p.display().to_string(), e.to_string()))?;
         let dst_aparent = p
@@ -519,7 +522,7 @@ pub fn plan_from_root(root: &Path) -> Result<Vec<FileTarget>, TheseusError> {
     for entry in WalkDir::new(root) {
         let entry = entry.map_err(|e| TheseusError::DirDir(e.to_string()))?;
         trace!("Entry {}", entry.path().display());
-        if entry.path().is_file() {
+        if !entry.path().is_dir() {
             let ft = FileTarget::from_path(entry.path(), root)?;
             debug!("FileTarget {}", ft.src.display());
             plan.push(ft);

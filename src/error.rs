@@ -118,4 +118,7 @@ pub enum TheseusError {
 
     #[error("Serializing to postcard")]
     Postcard(#[from] postcard::Error),
+
+    #[error("{0} does not exist or is broken")]
+    PathExist(String),
 }

@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = { version = "1.0.87", default-features = false, features = ["std"] }
-clap = { version = "4.5.17", default-features = false, features = ["derive", "help", "std", "cargo"] }
+clap = { version = "4.5.17", default-features = false, features = ["derive", "help", "std", "cargo", "error-context"] }
 current_platform = "0.2.0"
 faster-hex = { version = "0.10.0", default-features = false }
 futures = { version = "0.3.31", default-features = false, features = ["executor"] }
