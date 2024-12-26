@@ -26,7 +26,14 @@ use nix::{
 use tracing::{debug, error, trace};
 use walkdir::WalkDir;
 
-fn mode_to_string(m: Mode) -> String {
+/// Convert a file mode to an octal string
+///
+/// ```
+/// use nix::sys::stat::Mode;
+/// use theseus::target::mode_to_string;
+/// assert_eq!(mode_to_string(Mode::from_bits_truncate(0o777)), "777");
+/// ```
+pub fn mode_to_string(m: Mode) -> String {
     let m = m.bits();
     let o = (m >> 6) & 7;
     let g = (m >> 3) & 7;
@@ -35,6 +42,17 @@ fn mode_to_string(m: Mode) -> String {
     format!("{o:o}{g:o}{w:o}",)
 }
 
+/// Convert an octal string to a file mode
+///
+/// ```
+/// use nix::sys::stat::Mode;
+/// use theseus::error::*;
+/// use theseus::target::string_to_mode;
+/// fn main() -> Result<(), TheseusError> {
+///     assert_eq!(string_to_mode("777")?, Mode::from_bits_truncate(0o777));
+///     Ok(())
+/// }
+/// ```
 pub fn string_to_mode(s: &str) -> Result<Mode, TheseusError> {
     let bits = nix::libc::mode_t::from_str_radix(s, 8)
         .map_err(|e| TheseusError::InvalidPrm(e.to_string()))?;
@@ -42,24 +60,36 @@ pub fn string_to_mode(s: &str) -> Result<Mode, TheseusError> {
 }
 
 /// Attributes are attributes of a filesystem entry
+///
 /// They may be unspecified, and so are optional
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Attributes {
     /// The owner
+    ///
     /// May be a uid or the name of a user
     pub own: Option<String>,
     /// The group
+    ///
     /// May be a gid or the name of a group
     pub grp: Option<String>,
     /// The mode
+    ///
     /// Must be in `rwxrwxrwx` format
     pub mode: Option<Mode>,
 }
 
 impl Attributes {
-    /// Convert an `Iterator<Item = String>` to an `Attributes`
+    /// Convert an `Iterator<Item = String>` to an `Attributes`.
+    ///
     /// If any of `own`, `grp`, or `mode` are `*`, they are treated as
-    /// unspecified
+    /// unspecified.
+    ///
+    /// ```
+    /// use theseus::target::*;
+    /// let attr0 = Attributes {own: None, grp: None, mode: None};
+    /// let attr1 = Attributes::parse("*:*:*".split(":"));
+    /// assert_eq!(attr0,attr1);
+    /// ```
     pub fn parse<'a, S: Iterator<Item = &'a str> + std::fmt::Debug>(mut s: S) -> Self {
         let own = s.next().and_then(Self::from_star);
         let grp = s.next().and_then(Self::from_star);
@@ -81,6 +111,13 @@ impl Attributes {
     }
 
     /// Create an `Attributes` with all attributes unspecified
+    ///
+    /// ```
+    /// use theseus::target::*;
+    /// let attr0 = Attributes {own: None, grp: None, mode: None};
+    /// let attr1 = Attributes::unspecified();
+    /// assert_eq!(attr0,attr1);
+    /// ```
     pub fn unspecified() -> Self {
         Self {
             own: None,
@@ -96,10 +133,21 @@ impl Attributes {
         }
     }
 
-    /// Returns the uid of the user in the attribute
+    /// Returns the uid of the user in the attribute.
+    ///
     /// If a numeric uid is stored, return it.
-    /// If the system has no user with the stored name, return TheseusError::MissingUser
-    /// If no user/uid is stored, return the current user
+    /// If the system has no user with the stored name, return TheseusError::MissingUser.
+    /// If no user/uid is stored, return the current user.
+    ///
+    /// ```
+    /// use theseus::target::*;
+    /// use theseus::error::*;
+    /// fn main() -> Result<(), TheseusError> {
+    ///     let attr = Attributes {own: Some("0".to_string()), grp: None, mode: None};
+    ///     assert_eq!(attr.get_uid()?, 0.into());
+    ///     Ok(())
+    /// }
+    /// ```
     pub fn get_uid(&self) -> Result<Uid, TheseusError> {
         if self.own.is_none() {
             return Ok(getuid());
@@ -117,9 +165,20 @@ impl Attributes {
     }
 
     /// Returns the gid of the group in the attribute
+    ///
     /// If a numeric gid is stored, return it.
     /// If the system has no group with the stored name, return TheseusError::MissingGroup
-    /// If no group;gid is stored, return the current group
+    /// If no group/gid is stored, return the current group
+    ///
+    /// ```
+    /// use theseus::target::*;
+    /// use theseus::error::*;
+    /// fn main() -> Result<(), TheseusError> {
+    ///     let attr = Attributes {own: None, grp: Some("0".to_string()), mode: None};
+    ///     assert_eq!(attr.get_gid()?, 0.into());
+    ///     Ok(())
+    /// }
+    /// ```
     pub fn get_gid(&self) -> Result<Gid, TheseusError> {
         if self.grp.is_none() {
             return Ok(getgid());
@@ -137,7 +196,15 @@ impl Attributes {
     }
 
     /// Returns the mode in the attribute
+    ///
     /// If no mode is specified, returns `0o600` as the mode
+    ///
+    /// ```
+    /// use theseus::target::*;
+    /// use nix::sys::stat::Mode;
+    /// let attr0 = Attributes {own: None, grp: None, mode: None};
+    /// assert_eq!(attr0.get_mode(),Mode::from_bits_truncate(0o600));
+    /// ```
     pub fn get_mode(&self) -> Mode {
         match self.mode {
             Some(m) => m,
@@ -171,6 +238,7 @@ pub struct DirTarget {
 
 impl DirTarget {
     /// Create a new DirTarget from a path
+    ///
     /// Returns `None` if `dir` is not an absolute path or is empty
     pub fn new(dir: &Path) -> Option<DirTarget> {
         if dir.is_empty() {
@@ -268,46 +336,17 @@ impl Display for FileTarget {
 }
 
 /// If `str` is a `u32`, return the associated `u32`
+#[inline(always)]
 fn num_if(s: &str, radix: u32) -> Option<u32> {
     u32::from_str_radix(s, radix).ok()
 }
 
 impl FileTarget {
-    /// Parse a DirTarget from it's serialized form
-    /// A serialized FileTarget has the following structure:
-    /// `/src/path/dst_path:own:grp:prm`
-    /// The src of the FT is the path to the serialized FT
-    /// The dst of the FT is the name of the serialized FT
-    /// The own of the FT is the string after the first colon
-    /// The grp of the FT is the string after the second colon
-    /// The prm of the FT is the octal string after the third colon
-    pub fn parse(src: &Path, s: &str) -> Result<Self, TheseusError> {
-        let src = path::absolute(PathBuf::from(src))
-            .map_err(|e| TheseusError::Absolute(src.display().to_string(), e.to_string()))?;
-        let mut rst = s.split(':').peekable();
-        let dst = path::absolute(
-            rst.next()
-                .ok_or(TheseusError::MissingDst(s.to_string()))
-                .map(|t| PathBuf::from(t.replace('_', "/")))?,
-        )
-        .map_err(|e| TheseusError::Absolute(src.display().to_string(), e.to_string()))?;
-        let attr = match rst.peek() {
-            Some(_) => Attributes::parse(rst),
-            None => Attributes::unspecified(),
-        };
-        trace!("read target {}", src.display());
-        Ok(Self {
-            src,
-            dst,
-            attr,
-            saved: false,
-        })
-    }
-
     /// Read a FileTarget from a path
-    /// `p` is a local path, like ./bin/sh:root:root:755
-    /// The destination is `/bin/sh`
-    pub fn from_path(p: &Path, prefix: &Path) -> Result<Self, TheseusError> {
+    ///
+    /// `p` is a local path, like `./bin/sh:root:root:755`.
+    /// The destination is `/bin/sh`.
+    fn from_path(p: &Path, prefix: &Path) -> Result<Self, TheseusError> {
         if !p.try_exists()? {
             return Err(TheseusError::PathExist(p.to_string_lossy().to_string()));
         }
@@ -344,9 +383,10 @@ impl FileTarget {
     }
 
     /// Get uid/gid of a FileTarget
+    ///
     /// If stored user/group are uid/gid, then return them.
-    /// If they are names, find the associated uids/gids
-    /// Otherwise, use the current user/group
+    /// If they are names, find the associated uids/gids.
+    /// Otherwise, use the current user/group.
     fn ids(&self) -> Result<(Uid, Gid), TheseusError> {
         Ok((self.attr.get_uid()?, self.attr.get_gid()?))
     }
@@ -464,37 +504,6 @@ impl DependentPlan<(), Path, DirTarget, Vec<DirTarget>, FileTarget> for Vec<File
         deps.dedup();
         deps
     }
-}
-
-/// Read a theseus plan from a path
-/// The `dir` argument should be
-pub fn plan_from_dir(dir: &Path) -> Result<Vec<FileTarget>, TheseusError> {
-    if !dir.is_dir() {
-        return Err(TheseusError::NotDir(dir.to_string_lossy().to_string()));
-    }
-    let fts = std::fs::read_dir(dir)
-        .map_err(|e| TheseusError::DirRead(e.kind()))?
-        .map(|entry| {
-            let entry = entry.map_err(|e| TheseusError::DirEntry(e.kind()))?;
-            // Unwrap is safe since p was a directory entry
-            if entry.file_type().unwrap().is_dir() {
-                return Err(TheseusError::DirDir(
-                    entry.path().to_string_lossy().to_string(),
-                ));
-            }
-            let src_path = entry
-                .path()
-                .canonicalize()
-                .map_err(|e| TheseusError::Canonicalize(e.kind()))?;
-            let f_name = entry
-                .file_name()
-                .into_string()
-                .map_err(|_| TheseusError::NotUtf8(entry.path().to_string_lossy().to_string()))?;
-            FileTarget::parse(&src_path, &f_name)
-        })
-        .collect::<Result<Vec<FileTarget>, TheseusError>>()?;
-
-    Ok(fts)
 }
 
 /// Read a plan from a filesystem with root at `root`

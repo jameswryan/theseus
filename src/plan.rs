@@ -16,6 +16,7 @@ pub trait PlanItem<Save: ?Sized>: Sized {
     type Error: std::error::Error;
 
     /// Forward execution of a plan item
+    ///
     /// Execution *must* be atomic. If successful, it must return `Ok(Self)`.
     /// The contained `Self` may a copy of the item executed, or it may be an
     /// item that can be used to unwind the executed item. The optional second
@@ -24,6 +25,7 @@ pub trait PlanItem<Save: ?Sized>: Sized {
     fn execute(self, save: Option<&Save>) -> Result<Self, Self::Error>;
 
     /// Undo execution of an item
+    ///
     /// This function must not fail
     fn unwind(&self);
 
@@ -34,18 +36,20 @@ pub trait PlanItem<Save: ?Sized>: Sized {
 pub trait HasDeps<S: ?Sized, DS: ?Sized>: PlanItem<S> + Sized {
     type Dep: PlanItem<DS> + Ord;
 
-    /// Get an iterator over the dependencies of this plan item
-    /// Dependencies of a plan item are properties of the world that *must*
-    /// hold for item execution to succeed.
+    /// Get an iterator over the dependencies of this plan item.
+    ///
+    /// Dependencies of a plan item are properties of the ambient universe that
+    /// **must** hold for item execution to succeed.
     fn dependencies(&self) -> impl IntoIterator<Item = Self::Dep>;
 }
 
 pub trait Plan<S: ?Sized, Item: PlanItem<S>>: IntoIterator<Item = Item> + Sized {
-    /// Executes a plan
+    /// Executes a plan.
+    ///
     /// If execution of *all* items completes successfully, then the return
-    /// value is `Ok(())`
+    /// value is `Ok(())`.
     /// If execution of an item fails, then the items that *were* completed are
-    /// unwound, and the return value is `Err(<failed item>)`
+    /// unwound, and the return value is `Err(<failed item>)`.
     fn execute_plan(self, save: Option<&S>) -> Result<(), Item> {
         /* Peek lets us check if we complete the plan */
         let mut plan = self.into_iter().peekable();
@@ -81,6 +85,7 @@ pub trait DependentPlan<
     }
 
     /// Get an iterator over the dependencies of this plan
+    ///
     /// Dependencies of a plan are the union of the dependencies of the items
     /// in the plan
     fn dependencies(&self) -> impl IntoIterator<Item = Item::Dep>;

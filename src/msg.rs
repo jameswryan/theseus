@@ -77,6 +77,7 @@ impl GolemResponse for Result<(), GolemError> {
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum GolemRequest {
     /// Receive a new set of files
+    ///
     /// Completely replaces the old set of files
     Receive(BallMd),
     /// Apply a new set of files
@@ -90,8 +91,9 @@ pub enum GolemRequest {
 }
 
 impl GolemRequest {
-    /// Read a request from r
-    /// If invalid, log an error and send over w
+    /// Read a request from `r`.
+    ///
+    /// If invalid, log an error and send over `w`.
     pub fn read<RW: std::io::Read + std::io::Write + ?Sized>(
         rw: &mut RW,
     ) -> Result<Self, TheseusError> {
@@ -106,7 +108,8 @@ impl GolemRequest {
     }
 
     /// Write a request to w
-    /// If a valid `TheseusResponse` is received, returns `Ok(.)`
+    ///
+    /// If a valid `TheseusResponse` is received, returns `Ok(.)`.
     /// Otherwise, returns `Err(.)`
     pub fn write<RW: std::io::Read + std::io::Write + ?Sized>(
         &self,

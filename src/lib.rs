@@ -18,6 +18,7 @@ pub mod error;
 pub mod lvrw;
 pub mod msg;
 pub mod plan;
+pub mod provider;
 pub mod target;
 
 pub const THESEUSD_DEFAULT_ADDR: std::net::Ipv4Addr = std::net::Ipv4Addr::LOCALHOST;
@@ -105,10 +106,12 @@ impl Display for TheseusPlatform {
 }
 
 /// Check that a string is a well-formed name for a golem binary
-/// A well-formed name has the following format
+///
+/// A well-formed name has the format
 ///     `theseusg:<theseus-platform-triple>`
 /// where `<theseus-platform-triple>` is a rust target triple identifying a
 /// platform supported by theseus
+///
 /// If the name is well-formed, returns the `TheseusPlatform` supported by
 /// a golem with that name
 pub fn is_golem<S: AsRef<str>>(s: S) -> Option<TheseusPlatform> {

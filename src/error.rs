@@ -121,4 +121,25 @@ pub enum TheseusError {
 
     #[error("{0} does not exist or is broken")]
     PathExist(String),
+
+    #[error("crypto error")]
+    Crypto,
+
+    #[error("key provider error {0}")]
+    KeyProvider(String),
+
+    #[error("unknown key provider protocol {0}")]
+    UnknownProtocol(String),
+
+    #[error("missing uri in {0}")]
+    NoUri(String),
+
+    #[error("no key provided but {0} is encrypted")]
+    NoKey(String),
+
+    #[error("provider {0} does not support key generation")]
+    NoKeyGen(String),
+
+    #[error("deserializing key {0}")]
+    KeyDeserialize(String),
 }
