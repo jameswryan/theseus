@@ -180,7 +180,7 @@ impl Golem {
                 std::fs::File::open(&tpath).map_err(|e| GolemError::ServerError(e.to_string()))?;
             tf.read_to_end(&mut tfb)
                 .map_err(|e| GolemError::ServerError(e.to_string()))?;
-            let ck = crypto_checksum(&tfb);
+            let ck = crypto_hash(&tfb);
 
             if ck == md.checksum {
                 return Err(GolemError::BallExists);
@@ -212,7 +212,7 @@ impl Golem {
             .map_err(|e| GolemError::ServerError(e.to_string()))?;
 
         /* Verify checksum */
-        let ck = crypto_checksum(&buf[..]);
+        let ck = crypto_hash(&buf[..]);
 
         if ck != md.checksum {
             return Err(GolemError::BallChecksum);

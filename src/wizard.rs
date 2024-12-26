@@ -13,7 +13,10 @@
 use std::{
     collections::HashMap,
     fmt::Debug,
+    fs::{exists, set_permissions, File, Permissions},
+    io::{Read, Write},
     net::{IpAddr, Ipv4Addr, TcpStream},
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{self, Output, Stdio},
 };
@@ -28,10 +31,12 @@ use walkdir::WalkDir;
 
 use theseus::{
     ball::*,
+    crypto::*,
     error::*,
     is_golem,
     msg::*,
     plan::{DependentPlan, PlanItem},
+    provider::theseus_keygen,
     target::*,
     TheseusPlatform,
 };
@@ -45,6 +50,10 @@ struct WizardArgs {
     /// Comma separated list of paths to search for golems
     #[arg(short, value_delimiter = ',', num_args=1..)]
     golem_paths: Vec<String>,
+
+    /// Optional key provider used for encryption
+    #[arg(short, global = true)]
+    key_provider: Option<String>,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -127,6 +136,135 @@ enum Command {
         #[arg(required = true)]
         path: PathBuf,
     },
+
+    /// Open a file in $EDITOR
+    Open {
+        /// File to open
+        #[arg(required = true)]
+        file: PathBuf,
+    },
+
+    /// Create a new `file://` key
+    Keygen {
+        #[arg(required = true)]
+        path: PathBuf,
+    },
+
+    /// Deal with crypto
+    #[warn(
+        incomplete_features,
+        reason = "crypto interface is unstable and will change"
+    )]
+    Crypto {
+        #[command(subcommand)]
+        action: CryptoAction,
+    },
+
+    /// Change the key provider for a file
+    Rekey {
+        #[arg(required = true)]
+        path: PathBuf,
+
+        #[arg(required = true)]
+        from: String,
+
+        #[arg(required = true)]
+        to: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum CryptoAction {
+    /// Decrypt an encrypted file in-place
+    Decrypt {
+        #[arg(required = true)]
+        path: PathBuf,
+    },
+    /// Encrypt a file in-place
+    Encrypt {
+        #[arg(required = true)]
+        path: PathBuf,
+    },
+}
+
+/// If `p` exists, read and return the contents
+/// Otherwise, return nothing
+fn open_if_exists(p: &Path) -> Result<Vec<u8>> {
+    let mut fc = Vec::new();
+    if !exists(p)? {
+        return Ok(fc);
+    }
+    File::open(p)?.read_to_end(&mut fc)?;
+    Ok(fc)
+}
+
+/// Open a file in $EDITOR
+fn wizard_open(p: &Path, mkey: Option<&TheseusKey>) -> Result<()> {
+    trace!(
+        "open {} with{} key",
+        p.display(),
+        if mkey.is_some() { "" } else { "out" }
+    );
+    let _contents = open_if_exists(p)?;
+    let mut contents = if is_encrypted(&_contents[..], mkey)? {
+        trace!("encrypted");
+        let mkey = mkey.expect("no key for encrypted file");
+        encfile_read(&_contents[..], mkey)?
+    } else {
+        trace!("unencrypted");
+        _contents
+    };
+
+    let ck0 = crypto_hash(&contents);
+    debug!("opened {} got ck {}", p.display(), ck0);
+    let td = nix::unistd::mkdtemp("/tmp/theseus-editXXXXXX")?;
+    set_permissions(&td, Permissions::from_mode(0o700))?;
+    let tp = td.join("editing");
+    File::create(&tp)?.write_all(&contents)?;
+    contents.clear();
+    debug!("wrote to tmpfile {}", tp.display());
+
+    let ed = std::env!("EDITOR");
+    std::process::Command::new(ed)
+        .arg(&tp)
+        .stdin(process::Stdio::inherit())
+        .stdout(process::Stdio::inherit())
+        .stderr(process::Stdio::inherit())
+        .output()?;
+
+    File::open(tp)?.read_to_end(&mut contents)?;
+    std::fs::remove_dir_all(td)?;
+    let ck1 = crypto_hash(&contents);
+    debug!("new ck {}", ck1);
+    if ck0 == ck1 {
+        info!("checksum unchanged");
+        return Ok(());
+    }
+
+    info!("checksum changed, rewriting");
+    let mut fout = File::create(p)?;
+    if let Some(mkey) = mkey {
+        info!("Writing encrypted {}", p.display());
+        encfile_write(fout, mkey, contents)?
+    } else {
+        info!("Writing unencrypted {}", p.display());
+        fout.write_all(&contents)?;
+    }
+
+    info!("Wrote {}", p.display());
+
+    Ok(())
+}
+
+/// Performs a crypto action
+fn wizard_crypto(act: CryptoAction, mkey: Option<&TheseusKey>) -> Result<()> {
+    let Some(mkey) = mkey else {
+        return Err(TheseusError::NoKey("".to_string())).context("for {act:?}")?;
+    };
+    match act {
+        CryptoAction::Decrypt { path } => Ok(encrypt_in_place(&path, mkey)?),
+        CryptoAction::Encrypt { path } => Ok(decrypt_in_place(&path, mkey)?),
+    }
 }
 
 /// Reads a plan from a directory and checks for errors
@@ -560,6 +698,16 @@ async fn try_main() -> anyhow::Result<()> {
         })
         .finish();
     tracing::subscriber::set_global_default(tracer)?;
+
+    let mkey = if let Some(prov) = args.key_provider {
+        let k = Some(TheseusKey::from_provider(&prov)?);
+        trace!("provider {} had key", prov);
+        k
+    } else {
+        trace!("no provider");
+        None
+    };
+
     match args.command {
         Some(Command::Validate { dir }) => {
             let plan = validate_plan(Path::new(&dir))?;
@@ -583,7 +731,7 @@ async fn try_main() -> anyhow::Result<()> {
                 construct_golem(&address, &username, port, args.golem_paths.into_iter())?;
 
             let _plan_valid = validate_plan(&dir)?;
-            let ball = dir_to_ball(&dir)?;
+            let ball = dir_to_ball(&dir, mkey.as_ref())?;
             let md = BallMd::new(&ball);
             golem.upload((md, ball))?;
             golem.apply_plan()?;
@@ -631,10 +779,19 @@ async fn try_main() -> anyhow::Result<()> {
 
             path_map(|p| pchmod(mode, p), &path, recurse)
         }
+        Some(Command::Open { file }) => wizard_open(&file, mkey.as_ref()),
+        Some(Command::Keygen { path }) => {
+            Ok(theseus_keygen(&format!("file://{}", path.display()))?)
+        }
+        Some(Command::Rekey { path, from, to }) => {
+            let from = TheseusKey::from_provider(from)?;
+            let to = TheseusKey::from_provider(to)?;
+            rekey_in_place(&path, &from, &to)?;
+            Ok(())
+        }
 
-        _ => WizardArgs::command()
-            .print_help()
-            .context("no / unknown args"),
+        Some(Command::Crypto { action }) => wizard_crypto(action, mkey.as_ref()),
+        None => WizardArgs::command().print_help().context("no args"),
     }
 }
 

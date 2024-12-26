@@ -54,6 +54,7 @@ A plan with multiple such files might look like:
 
 Next, you'll need passwordless ssh access to the machine you would like to apply the plan to.
 The golem does not support escalating privileges, so you'll probably need passwordless access to the root user.
+Test the connectivity to the target machine with `theseus construct-golem -a <ip address or hostname>`.
 
 Check that your plan is valid with `theseus validate </path/to/your/plan>`, and apply it to the target machine with `theseus apply -a <ip address or hostname> -d </path/to/your/plan>`.
 
