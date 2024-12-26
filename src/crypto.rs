@@ -416,7 +416,7 @@ mod test {
         let file = vec![1u8; 256];
         let mut efile = Vec::new();
         encfile_write(&mut efile, &mkey, file.clone())?;
-        let mut pfile = encfile_read(&efile[..], &mkey)?;
+        let pfile = encfile_read(&efile[..], &mkey)?;
         assert_eq!(file, pfile);
         Ok(())
     }
