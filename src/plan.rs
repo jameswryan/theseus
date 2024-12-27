@@ -43,7 +43,9 @@ pub trait HasDeps<S: ?Sized, DS: ?Sized>: PlanItem<S> + Sized {
     fn dependencies(&self) -> impl IntoIterator<Item = Self::Dep>;
 }
 
-pub trait Plan<S: ?Sized, Item: PlanItem<S>>: IntoIterator<Item = Item> + Sized {
+pub trait Plan<S: ?Sized, Item: PlanItem<S>>:
+    IntoIterator<Item = Item> + Sized
+{
     /// Executes a plan.
     ///
     /// If execution of *all* items completes successfully, then the return
@@ -67,7 +69,10 @@ pub trait Plan<S: ?Sized, Item: PlanItem<S>>: IntoIterator<Item = Item> + Sized 
     }
 }
 
-impl<S: ?Sized, IT: PlanItem<S>, P> Plan<S, IT> for P where P: IntoIterator<Item = IT> {}
+impl<S: ?Sized, IT: PlanItem<S>, P> Plan<S, IT> for P where
+    P: IntoIterator<Item = IT>
+{
+}
 
 pub trait DependentPlan<
     DS: ?Sized,

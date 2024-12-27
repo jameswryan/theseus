@@ -259,7 +259,8 @@ fn wizard_open(p: &Path, mkey: Option<&TheseusKey>) -> Result<()> {
 /// Performs a crypto action
 fn wizard_crypto(act: CryptoAction, mkey: Option<&TheseusKey>) -> Result<()> {
     let Some(mkey) = mkey else {
-        return Err(TheseusError::NoKey("".to_string())).context("for {act:?}")?;
+        return Err(TheseusError::NoKey("".to_string()))
+            .context("for {act:?}")?;
     };
     match act {
         CryptoAction::Decrypt { path } => Ok(encrypt_in_place(&path, mkey)?),
@@ -276,7 +277,11 @@ fn validate_plan(dir: &Path) -> Result<Vec<FileTarget>, TheseusError> {
 
 /// Replace `p` with `f p`.
 /// If `r` is true, do this recursively
-fn path_map(f: impl Fn(&str) -> anyhow::Result<String>, p: &Path, r: bool) -> anyhow::Result<()> {
+fn path_map(
+    f: impl Fn(&str) -> anyhow::Result<String>,
+    p: &Path,
+    r: bool,
+) -> anyhow::Result<()> {
     trace!(
         "{}path map {}",
         if r { "recursive " } else { "" },
@@ -389,8 +394,12 @@ trait Golem: std::io::Read + std::io::Write {
             Err(ge) => match ge {
                 GolemError::BallExists => unreachable!(),
                 GolemError::BallChecksum => unreachable!(),
-                GolemError::ServerError(e) => error!("Golem internal error: {e}"),
-                GolemError::DependencyError(e) => error!("Golem dependency error: {e}"),
+                GolemError::ServerError(e) => {
+                    error!("Golem internal error: {e}")
+                }
+                GolemError::DependencyError(e) => {
+                    error!("Golem dependency error: {e}")
+                }
                 GolemError::PlanError(e) => error!("Golem plan error: {e}"),
                 GolemError::InvalidRequest => error!("Transmission error!"),
             },
@@ -434,16 +443,23 @@ struct LocalGolem {
 }
 
 impl LocalGolem {
-    fn construct(port: u16, golem_paths: impl Iterator<Item = String>) -> Result<Self> {
+    fn construct(
+        port: u16,
+        golem_paths: impl Iterator<Item = String>,
+    ) -> Result<Self> {
         /* Panic if current platform not supported */
-        let platform = TheseusPlatform::new(current_platform::CURRENT_PLATFORM).unwrap();
+        let platform =
+            TheseusPlatform::new(current_platform::CURRENT_PLATFORM).unwrap();
         debug!("Looking for golems for {platform}");
-        let golems = find_golems(golem_paths).context("while finding golems")?;
-        let golem_path = golems.get(&platform).ok_or(anyhow!("no golems found"))?;
+        let golems =
+            find_golems(golem_paths).context("while finding golems")?;
+        let golem_path =
+            golems.get(&platform).ok_or(anyhow!("no golems found"))?;
         debug!("Found golem at {}", golem_path.display());
 
         info!("Copying golem to /tmp/thesesug");
-        std::fs::copy(golem_path, Path::new("/tmp/theseusg")).context("copying golem")?;
+        std::fs::copy(golem_path, Path::new("/tmp/theseusg"))
+            .context("copying golem")?;
         debug!("Copied");
 
         info!("Starting golem",);
@@ -534,8 +550,10 @@ impl RemoteGolem {
         info!("Platform is {platform}");
 
         debug!("Looking for golems for {platform}");
-        let golems = find_golems(golem_paths).context("while finding golems")?;
-        let golem_path = golems.get(&platform).ok_or(anyhow!("no golems found"))?;
+        let golems =
+            find_golems(golem_paths).context("while finding golems")?;
+        let golem_path =
+            golems.get(&platform).ok_or(anyhow!("no golems found"))?;
         debug!("Found golem at {}", golem_path.display());
 
         info!("Copying golem to {host}",);
@@ -552,7 +570,10 @@ impl RemoteGolem {
         info!("Forwarding remote port {port} to local port {port}");
         let (fwt, fwsck) = (
             openssh::ForwardType::Remote,
-            std::net::SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port),
+            std::net::SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+                port,
+            ),
         );
 
         session
@@ -602,7 +623,9 @@ impl RemoteGolem {
         })
     }
 
-    async fn get_remote_platform(sess: &mut Session) -> Result<TheseusPlatform> {
+    async fn get_remote_platform(
+        sess: &mut Session,
+    ) -> Result<TheseusPlatform> {
         let outv = sess
             .command("uname")
             .args(["-sm"])
@@ -657,7 +680,9 @@ impl Golem for RemoteGolem {
 
         info!("Closing port forward");
         let (fwt, fwsck) = self.forward;
-        futures::executor::block_on(self.session.close_port_forward(fwt, fwsck, fwsck))?;
+        futures::executor::block_on(
+            self.session.close_port_forward(fwt, fwsck, fwsck),
+        )?;
         debug!("Closed");
 
         info!("Closing session");
@@ -675,7 +700,9 @@ fn construct_golem(
     golem_paths: impl Iterator<Item = String>,
 ) -> anyhow::Result<Box<dyn Golem>> {
     match addr {
-        "localhost" | "127.0.0.1" => Ok(Box::new(LocalGolem::construct(port, golem_paths)?)),
+        "localhost" | "127.0.0.1" => {
+            Ok(Box::new(LocalGolem::construct(port, golem_paths)?))
+        }
         _ => Ok(Box::new(futures::executor::block_on(
             RemoteGolem::construct(addr, user, port, golem_paths),
         )?)),
@@ -727,8 +754,12 @@ async fn try_main() -> anyhow::Result<()> {
             port,
             dir,
         }) => {
-            let mut golem =
-                construct_golem(&address, &username, port, args.golem_paths.into_iter())?;
+            let mut golem = construct_golem(
+                &address,
+                &username,
+                port,
+                args.golem_paths.into_iter(),
+            )?;
 
             let _plan_valid = validate_plan(&dir)?;
             info!("plan at {} is valid", dir.display());
@@ -746,7 +777,12 @@ async fn try_main() -> anyhow::Result<()> {
             username,
             port,
         }) => {
-            let golem = construct_golem(&address, &username, port, args.golem_paths.into_iter())?;
+            let golem = construct_golem(
+                &address,
+                &username,
+                port,
+                args.golem_paths.into_iter(),
+            )?;
 
             golem.kill()?;
             Ok(())
@@ -791,7 +827,9 @@ async fn try_main() -> anyhow::Result<()> {
             Ok(())
         }
 
-        Some(Command::Crypto { action }) => wizard_crypto(action, mkey.as_ref()),
+        Some(Command::Crypto { action }) => {
+            wizard_crypto(action, mkey.as_ref())
+        }
         None => WizardArgs::command().print_help().context("no args"),
     }
 }

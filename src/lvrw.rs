@@ -12,7 +12,10 @@
 
 use std::mem::size_of;
 
-pub fn lvw<W: std::io::Write + ?Sized>(w: &mut W, val: &[u8]) -> std::io::Result<()> {
+pub fn lvw<W: std::io::Write + ?Sized>(
+    w: &mut W,
+    val: &[u8],
+) -> std::io::Result<()> {
     let len_bytes = (val.len() as u64).to_le_bytes();
     w.write_all(&len_bytes)?;
     w.write_all(val)

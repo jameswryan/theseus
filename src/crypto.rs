@@ -12,7 +12,9 @@
 
 use serde::{Deserialize, Serialize};
 use subtle::{Choice, ConstantTimeEq};
-use xoodyak::{XoodyakCommon, XoodyakHash, XoodyakKeyed, XOODYAK_AUTH_TAG_BYTES};
+use xoodyak::{
+    XoodyakCommon, XoodyakHash, XoodyakKeyed, XOODYAK_AUTH_TAG_BYTES,
+};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -78,7 +80,9 @@ pub fn crypto_hash(inp: &[u8]) -> TheseusHash {
 ///
 /// This function is **not** intended to resist password cracking attempts, and
 /// such a function is not provided
-pub fn crypto_kdf<IT: IntoIterator<Item = impl AsRef<[u8]>>>(inps: IT) -> TheseusKey {
+pub fn crypto_kdf<IT: IntoIterator<Item = impl AsRef<[u8]>>>(
+    inps: IT,
+) -> TheseusKey {
     let mut hasher = XoodyakHash::new();
     hasher.absorb(DOMAIN_DERIVE);
 
@@ -158,10 +162,13 @@ impl TheseusKey {
 ///
 /// Requires that enough room for the tag (`TAG_LEN`) be left at the end of
 /// the buffer
-fn crypto_encrypt_in_place(inout: &mut [u8]) -> Result<TheseusKey, TheseusError> {
+fn crypto_encrypt_in_place(
+    inout: &mut [u8],
+) -> Result<TheseusKey, TheseusError> {
     let key = TheseusKey::from_entropy()?;
-    let mut cipher = XoodyakKeyed::new(&key.0, None, Some(DOMAIN_ENCRYPT), None)
-        .or(Err(TheseusError::Crypto))?;
+    let mut cipher =
+        XoodyakKeyed::new(&key.0, None, Some(DOMAIN_ENCRYPT), None)
+            .or(Err(TheseusError::Crypto))?;
     cipher
         .aead_encrypt_in_place(inout)
         .or(Err(TheseusError::Crypto))?;
@@ -170,9 +177,13 @@ fn crypto_encrypt_in_place(inout: &mut [u8]) -> Result<TheseusKey, TheseusError>
 }
 
 /// Decrypt in-place with key `key`
-fn crypto_decrypt_in_place(inout: &mut [u8], key: &TheseusKey) -> Result<(), TheseusError> {
-    let mut cipher = XoodyakKeyed::new(&key.0, None, Some(DOMAIN_ENCRYPT), None)
-        .or(Err(TheseusError::Crypto))?;
+fn crypto_decrypt_in_place(
+    inout: &mut [u8],
+    key: &TheseusKey,
+) -> Result<(), TheseusError> {
+    let mut cipher =
+        XoodyakKeyed::new(&key.0, None, Some(DOMAIN_ENCRYPT), None)
+            .or(Err(TheseusError::Crypto))?;
     cipher
         .aead_decrypt_in_place(inout)
         .or(Err(TheseusError::Crypto))?;
@@ -181,10 +192,13 @@ fn crypto_decrypt_in_place(inout: &mut [u8], key: &TheseusKey) -> Result<(), The
 
 /// Ensure header has size HEADER_SIZE (in bytes)
 const HEADER_SIZE: usize = 128;
-const _: () = [(); 1][(core::mem::size_of::<Header>() == HEADER_SIZE) as usize ^ 1];
+const _: () =
+    [(); 1][(core::mem::size_of::<Header>() == HEADER_SIZE) as usize ^ 1];
 
 /// On-disk header for encrypted file format
-#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, PartialEq, Eq, Debug)]
+#[derive(
+    FromBytes, IntoBytes, Immutable, KnownLayout, PartialEq, Eq, Debug,
+)]
 #[repr(C, packed)]
 struct Header {
     /* If new fields need to be authenticated, put them *before* _unused */
@@ -194,7 +208,12 @@ struct Header {
     /// Version of the on-disk format
     version: u8,
     /// Padding :)
-    _unused: [u8; HEADER_SIZE - MAGIC_LEN - size_of::<u8>() - SALT_LEN - TAG_LEN - KEY_LEN],
+    _unused: [u8; HEADER_SIZE
+        - MAGIC_LEN
+        - size_of::<u8>()
+        - SALT_LEN
+        - TAG_LEN
+        - KEY_LEN],
     /// Salt for file key
     salt: [u8; SALT_LEN],
     /// Header authentication tag
@@ -208,7 +227,8 @@ impl Header {
     const HCV: u8 = 0;
 
     /// Amount of space in the header not currently used
-    const FREE: usize = HEADER_SIZE - MAGIC_LEN - TAG_LEN - 16 - KEY_LEN - size_of::<u8>();
+    const FREE: usize =
+        HEADER_SIZE - MAGIC_LEN - TAG_LEN - 16 - KEY_LEN - size_of::<u8>();
 
     /// Create a new header at the current version
     fn new(mkey: &TheseusKey, fkey: &TheseusKey) -> Result<Self, TheseusError> {
@@ -218,8 +238,13 @@ impl Header {
 
         let salt = new_entropy()?;
         let fkeykey = mkey.derive_cryptokey(salt);
-        let mut cipher = XoodyakKeyed::new(&fkeykey.0, Some(&ad), Some(DOMAIN_FKEYKEY), None)
-            .or(Err(TheseusError::Crypto))?;
+        let mut cipher = XoodyakKeyed::new(
+            &fkeykey.0,
+            Some(&ad),
+            Some(DOMAIN_FKEYKEY),
+            None,
+        )
+        .or(Err(TheseusError::Crypto))?;
 
         let mut ekey = fkey.clone();
         let htag = cipher.aead_encrypt_in_place_detached(&mut ekey.0).into();
@@ -242,8 +267,13 @@ impl Header {
 
         let fkeykey = mkey.derive_cryptokey(self.salt);
         let mut fkey = self.ekey;
-        let mut cipher = XoodyakKeyed::new(&fkeykey.0, Some(&ad), Some(DOMAIN_FKEYKEY), None)
-            .or(Err(TheseusError::Crypto))?;
+        let mut cipher = XoodyakKeyed::new(
+            &fkeykey.0,
+            Some(&ad),
+            Some(DOMAIN_FKEYKEY),
+            None,
+        )
+        .or(Err(TheseusError::Crypto))?;
         cipher
             .aead_decrypt_in_place_detached(&mut fkey, &self.htag.into())
             .or(Err(TheseusError::Crypto))?;
@@ -255,7 +285,10 @@ impl Header {
     ///
     /// Checks that the header is *semantically* valid.
     /// That is, checks that the header tag authenticates the header
-    fn from_bytes(raw: [u8; HEADER_SIZE], mkey: &TheseusKey) -> Result<Self, TheseusError> {
+    fn from_bytes(
+        raw: [u8; HEADER_SIZE],
+        mkey: &TheseusKey,
+    ) -> Result<Self, TheseusError> {
         /* Read header */
         let maybe_self: Header = zerocopy::transmute!(raw);
 
@@ -264,12 +297,21 @@ impl Header {
         ad.extend(maybe_self.version.to_le_bytes());
 
         let fkeykey = mkey.derive_cryptokey(maybe_self.salt);
-        let mut cipher = XoodyakKeyed::new(&fkeykey.0, Some(&ad), Some(DOMAIN_FKEYKEY), None)
-            .or(Err(TheseusError::Crypto))?;
+        let mut cipher = XoodyakKeyed::new(
+            &fkeykey.0,
+            Some(&ad),
+            Some(DOMAIN_FKEYKEY),
+            None,
+        )
+        .or(Err(TheseusError::Crypto))?;
 
         let mut fkey = [0u8; KEY_LEN];
         cipher
-            .aead_decrypt_detached(&mut fkey, &maybe_self.htag.into(), Some(&maybe_self.ekey))
+            .aead_decrypt_detached(
+                &mut fkey,
+                &maybe_self.htag.into(),
+                Some(&maybe_self.ekey),
+            )
             .or(Err(TheseusError::Crypto))?;
         fkey[..].zeroize();
 
@@ -314,7 +356,10 @@ pub fn encfile_read<R: std::io::Read>(
 }
 
 /// Encrypt a file in-place using key `mkey`
-pub fn encrypt_in_place(p: &Path, mkey: &TheseusKey) -> Result<(), TheseusError> {
+pub fn encrypt_in_place(
+    p: &Path,
+    mkey: &TheseusKey,
+) -> Result<(), TheseusError> {
     let mut data = std::fs::read(p)?;
     let fkey = crypto_encrypt_in_place(&mut data)?;
     let mut f = File::create(p)?;
@@ -325,7 +370,10 @@ pub fn encrypt_in_place(p: &Path, mkey: &TheseusKey) -> Result<(), TheseusError>
 }
 
 /// Decrypt a file in-place using key `mkey`
-pub fn decrypt_in_place(p: &Path, mkey: &TheseusKey) -> Result<(), TheseusError> {
+pub fn decrypt_in_place(
+    p: &Path,
+    mkey: &TheseusKey,
+) -> Result<(), TheseusError> {
     let r = File::open(p)?;
     let data = encfile_read(r, mkey)?;
     Ok(File::create(p)?.write_all(&data)?)
@@ -360,7 +408,11 @@ pub fn is_encrypted<R: std::io::Read>(
 /// Change the master key for `p` in-place
 ///
 /// Also changes the file encryption key and salt
-pub fn rekey_in_place(p: &Path, from: &TheseusKey, to: &TheseusKey) -> Result<(), TheseusError> {
+pub fn rekey_in_place(
+    p: &Path,
+    from: &TheseusKey,
+    to: &TheseusKey,
+) -> Result<(), TheseusError> {
     let mut f = std::fs::OpenOptions::new().read(true).write(true).open(p)?;
     let fpt = encfile_read(&mut f, from)?;
     f.set_len(0)?;
@@ -377,9 +429,9 @@ mod test {
     fn test_hash_is_xoodyak() {
         let inp = [0u8; 16];
         let exp = [
-            0xb8, 0x68, 0x19, 0xd3, 0xab, 0x1a, 0x53, 0x1d, 0xf8, 0xec, 0x8c, 0xf6, 0x20, 0xf8,
-            0xb0, 0xd, 0x9f, 0xe7, 0x35, 0x64, 0x67, 0x66, 0xba, 0x48, 0x6e, 0xdc, 0x6f, 0x7b,
-            0x8c, 0x72, 0x3b, 0x16,
+            0xb8, 0x68, 0x19, 0xd3, 0xab, 0x1a, 0x53, 0x1d, 0xf8, 0xec, 0x8c,
+            0xf6, 0x20, 0xf8, 0xb0, 0xd, 0x9f, 0xe7, 0x35, 0x64, 0x67, 0x66,
+            0xba, 0x48, 0x6e, 0xdc, 0x6f, 0x7b, 0x8c, 0x72, 0x3b, 0x16,
         ];
         let out = crypto_hash(&inp);
 
@@ -390,8 +442,8 @@ mod test {
     fn test_kdf_is_xoodyak() {
         let inps = [[0u8; 16]; 16];
         let exp = [
-            0xa1, 0x13, 0x84, 0xbd, 0xae, 0x3b, 0x19, 0xb3, 0x0f, 0xf5, 0x25, 0xb6, 0x85, 0x12,
-            0x7b, 0xde,
+            0xa1, 0x13, 0x84, 0xbd, 0xae, 0x3b, 0x19, 0xb3, 0x0f, 0xf5, 0x25,
+            0xb6, 0x85, 0x12, 0x7b, 0xde,
         ];
         let out = crypto_kdf(inps);
         assert_eq!(out.0, exp);
@@ -432,7 +484,8 @@ mod test {
     }
 
     #[test]
-    fn encfile_is_not_encrypted_with_different_key() -> Result<(), Box<dyn std::error::Error>> {
+    fn encfile_is_not_encrypted_with_different_key(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mkey = TheseusKey::from_entropy()?;
         let not_mkey = TheseusKey::from_entropy()?;
         let file = vec![1u8; 256];
@@ -443,7 +496,8 @@ mod test {
     }
 
     #[test]
-    fn encfile_modified_version_is_not_encrypted() -> Result<(), Box<dyn std::error::Error>> {
+    fn encfile_modified_version_is_not_encrypted(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mkey = TheseusKey::from_entropy()?;
         let file = vec![1u8; 256];
         let mut efile = Vec::new();

@@ -21,7 +21,8 @@ pub mod plan;
 pub mod provider;
 pub mod target;
 
-pub const THESEUSD_DEFAULT_ADDR: std::net::Ipv4Addr = std::net::Ipv4Addr::LOCALHOST;
+pub const THESEUSD_DEFAULT_ADDR: std::net::Ipv4Addr =
+    std::net::Ipv4Addr::LOCALHOST;
 pub const THESEUSD_DEFAULT_PORT: u16 = 6666;
 pub const THESEUSD_DEFAULT_WORKDIR: &str = "/var/lib/theseus";
 

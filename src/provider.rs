@@ -35,7 +35,9 @@ impl Display for TheseusProviderProtocol {
     }
 }
 
-fn parse_protocol(s: &str) -> Result<(TheseusProviderProtocol, &str), TheseusError> {
+fn parse_protocol(
+    s: &str,
+) -> Result<(TheseusProviderProtocol, &str), TheseusError> {
     let mut sp = s.split("://");
     let prot = sp.next().expect("at least one &str from a split");
     let uri = sp.next().ok_or(TheseusError::NoUri(s.to_string()))?;
@@ -57,7 +59,8 @@ fn file_keygen(uri: &str) -> Result<(), TheseusError> {
 }
 
 fn shell_getkey(uri: &str) -> std::io::Result<Vec<u8>> {
-    let cmd: Vec<_> = uri.split_whitespace().filter(|ss| !ss.is_empty()).collect();
+    let cmd: Vec<_> =
+        uri.split_whitespace().filter(|ss| !ss.is_empty()).collect();
     Ok(Command::new(cmd[0])
         .args(&cmd[1..])
         .stdin(Stdio::inherit())

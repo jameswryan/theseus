@@ -90,7 +90,9 @@ impl Attributes {
     /// let attr1 = Attributes::parse("*:*:*".split(":"));
     /// assert_eq!(attr0,attr1);
     /// ```
-    pub fn parse<'a, S: Iterator<Item = &'a str> + std::fmt::Debug>(mut s: S) -> Self {
+    pub fn parse<'a, S: Iterator<Item = &'a str> + std::fmt::Debug>(
+        mut s: S,
+    ) -> Self {
         let own = s.next().and_then(Self::from_star);
         let grp = s.next().and_then(Self::from_star);
         let mode = s.next().and_then(|m| string_to_mode(m).ok());
@@ -100,8 +102,9 @@ impl Attributes {
 
     /// Get the `Attributes` of a path
     pub fn from_path(p: &Path) -> Result<Self, TheseusError> {
-        let st = stat(p)
-            .map_err(|e| TheseusError::Stat(e.to_string(), p.to_string_lossy().into_owned()))?;
+        let st = stat(p).map_err(|e| {
+            TheseusError::Stat(e.to_string(), p.to_string_lossy().into_owned())
+        })?;
 
         Ok(Self {
             own: Some(st.st_uid.to_string()),
@@ -293,8 +296,9 @@ impl PlanItem<()> for DirTarget {
                 created: false,
             });
         }
-        std::fs::create_dir(&self.path)
-            .map_err(|e| TheseusError::Create(self.to_string(), e.to_string()))?;
+        std::fs::create_dir(&self.path).map_err(|e| {
+            TheseusError::Create(self.to_string(), e.to_string())
+        })?;
         debug!("created {}", self.path.display());
         Ok(DirTarget {
             path: self.path,
@@ -305,8 +309,9 @@ impl PlanItem<()> for DirTarget {
 
     fn unwind(&self) {
         if self.created {
-            std::fs::remove_dir(&self.path)
-                .unwrap_or_else(|e| error!("removing {} {}", self.path.display(), e));
+            std::fs::remove_dir(&self.path).unwrap_or_else(|e| {
+                error!("removing {} {}", self.path.display(), e)
+            });
         }
     }
 
@@ -348,10 +353,13 @@ impl FileTarget {
     /// The destination is `/bin/sh`.
     fn from_path(p: &Path, prefix: &Path) -> Result<Self, TheseusError> {
         if !p.try_exists()? {
-            return Err(TheseusError::PathExist(p.to_string_lossy().to_string()));
+            return Err(TheseusError::PathExist(
+                p.to_string_lossy().to_string(),
+            ));
         }
-        let src = path::absolute(PathBuf::from(p))
-            .map_err(|e| TheseusError::Absolute(p.display().to_string(), e.to_string()))?;
+        let src = path::absolute(PathBuf::from(p)).map_err(|e| {
+            TheseusError::Absolute(p.display().to_string(), e.to_string())
+        })?;
         let dst_aparent = p
             .strip_prefix(prefix)
             .unwrap_or(p)
@@ -393,15 +401,20 @@ impl FileTarget {
 }
 
 #[inline]
-fn compute_save(p: &Path, prefix: Option<&Path>) -> Result<Option<FileTarget>, TheseusError> {
+fn compute_save(
+    p: &Path,
+    prefix: Option<&Path>,
+) -> Result<Option<FileTarget>, TheseusError> {
     if !p.exists() || prefix.is_none() {
         return Ok(None);
     }
     let prefix = prefix.unwrap();
-    let st = nix::sys::stat::stat(p)
-        .map_err(|e| TheseusError::Stat(e.to_string(), p.to_string_lossy().into_owned()))?;
-    let dst = path::absolute(p)
-        .map_err(|e| TheseusError::Absolute(p.display().to_string(), e.to_string()))?;
+    let st = nix::sys::stat::stat(p).map_err(|e| {
+        TheseusError::Stat(e.to_string(), p.to_string_lossy().into_owned())
+    })?;
+    let dst = path::absolute(p).map_err(|e| {
+        TheseusError::Absolute(p.display().to_string(), e.to_string())
+    })?;
     let own = User::from_uid(st.st_uid.into())
         .map_err(|e| TheseusError::GetUser(e.to_string()))?
         .map_or_else(|| st.st_uid.to_string(), |usr| usr.name);
@@ -432,26 +445,36 @@ impl PlanItem<Path> for FileTarget {
 
         let save = compute_save(&self.dst, savepath)?;
         if let Some(save) = save.as_ref() {
-            copy(&self.dst, &save.src)
-                .map_err(|e| TheseusError::Copy(save.src.display().to_string(), e.kind()))?;
+            copy(&self.dst, &save.src).map_err(|e| {
+                TheseusError::Copy(save.src.display().to_string(), e.kind())
+            })?;
         }
-        copy(&self.src, &self.dst)
-            .map_err(|e| TheseusError::Copy(self.src.display().to_string(), e.kind()))?;
+        copy(&self.src, &self.dst).map_err(|e| {
+            TheseusError::Copy(self.src.display().to_string(), e.kind())
+        })?;
 
         let m = self.attr.get_mode();
-        fchmodat(None, &self.src, m, FchmodatFlags::FollowSymlink)
-            .map_err(|e| TheseusError::Chmod(self.src.display().to_string(), e.to_string()))?;
+        fchmodat(None, &self.src, m, FchmodatFlags::FollowSymlink).map_err(
+            |e| {
+                TheseusError::Chmod(
+                    self.src.display().to_string(),
+                    e.to_string(),
+                )
+            },
+        )?;
 
-        chown(&self.src, Some(uid), Some(gid))
-            .map_err(|e| TheseusError::Chown(self.src.display().to_string(), e.to_string()))?;
+        chown(&self.src, Some(uid), Some(gid)).map_err(|e| {
+            TheseusError::Chown(self.src.display().to_string(), e.to_string())
+        })?;
 
         Ok(save.unwrap_or(self))
     }
 
     fn unwind(&self) {
         /* Remove emplaced file */
-        nix::unistd::unlink(&self.dst)
-            .unwrap_or_else(|_| panic!("remove written {}", self.src.display()));
+        nix::unistd::unlink(&self.dst).unwrap_or_else(|_| {
+            panic!("remove written {}", self.src.display())
+        });
 
         /* Only need to restore if src was saved */
         if self.saved {
@@ -495,11 +518,14 @@ impl HasDeps<Path, ()> for FileTarget {
     }
 }
 
-impl DependentPlan<(), Path, DirTarget, Vec<DirTarget>, FileTarget> for Vec<FileTarget> {
+impl DependentPlan<(), Path, DirTarget, Vec<DirTarget>, FileTarget>
+    for Vec<FileTarget>
+{
     fn dependencies(&self) -> Vec<DirTarget> {
         /* Dependency trees should be small, so performance doesn't really matter */
         /* But still, vec + sort + dedup is probably faster than ordered set for small data */
-        let mut deps: Vec<_> = self.iter().flat_map(|ft| ft.dependencies()).collect();
+        let mut deps: Vec<_> =
+            self.iter().flat_map(|ft| ft.dependencies()).collect();
         deps.sort();
         deps.dedup();
         deps

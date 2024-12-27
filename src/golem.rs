@@ -11,7 +11,9 @@
 // limitations under the License.
 
 use std::io::Read;
-use std::{io::Write, net::TcpStream, os::unix::fs::OpenOptionsExt, path::PathBuf};
+use std::{
+    io::Write, net::TcpStream, os::unix::fs::OpenOptionsExt, path::PathBuf,
+};
 
 use clap::Parser;
 use tracing::{debug, error, info, trace, warn};
@@ -157,7 +159,8 @@ impl Golem {
         );
         std::fs::remove_dir_all(&self.ball_root)
             .map_err(|e| GolemError::ServerError(e.to_string()))?;
-        std::fs::create_dir(&self.ball_root).map_err(|e| GolemError::ServerError(e.to_string()))?;
+        std::fs::create_dir(&self.ball_root)
+            .map_err(|e| GolemError::ServerError(e.to_string()))?;
         ball.to_dir(&self.ball_root)
             .map_err(|e| GolemError::ServerError(e.to_string()))?;
         trace!("unballed {}", md.to_string());
@@ -177,8 +180,8 @@ impl Golem {
         /* Check whether ball with that hash exists */
         if tpath.exists() {
             let mut tfb = Vec::new();
-            let mut tf =
-                std::fs::File::open(&tpath).map_err(|e| GolemError::ServerError(e.to_string()))?;
+            let mut tf = std::fs::File::open(&tpath)
+                .map_err(|e| GolemError::ServerError(e.to_string()))?;
             tf.read_to_end(&mut tfb)
                 .map_err(|e| GolemError::ServerError(e.to_string()))?;
             let ck = crypto_hash(&tfb);
@@ -231,8 +234,8 @@ impl Golem {
     fn handle_apply(&self) -> Result<(), GolemError> {
         trace!("handle_apply");
 
-        let plan =
-            plan_from_root(&self.ball_root).map_err(|e| GolemError::ServerError(e.to_string()))?;
+        let plan = plan_from_root(&self.ball_root)
+            .map_err(|e| GolemError::ServerError(e.to_string()))?;
         trace!("read plan of length {}", plan.len());
         plan.execute_dependencies()
             .map_err(|e| GolemError::DependencyError(e.identify()))?;

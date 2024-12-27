@@ -69,7 +69,10 @@ impl Ball {
     ///
     /// If some files are encrypted, attempt to decrypt them with `mkey`. If
     /// that fails, an error is returned.
-    pub fn from_dir(dir: &Path, mkey: Option<&TheseusKey>) -> Result<Self, TheseusError> {
+    pub fn from_dir(
+        dir: &Path,
+        mkey: Option<&TheseusKey>,
+    ) -> Result<Self, TheseusError> {
         let ze = snap::write::FrameEncoder::new(Vec::new());
         let ze = ball(ze, dir, mkey)?;
         let data = ze
@@ -82,11 +85,15 @@ impl Ball {
     /// Unpack a ball into `dir`
     pub fn to_dir(self, dir: &Path) -> Result<(), TheseusError> {
         let mut entries_bytes = Vec::new();
-        snap::read::FrameDecoder::new(&self.data[..]).read_to_end(&mut entries_bytes)?;
+        snap::read::FrameDecoder::new(&self.data[..])
+            .read_to_end(&mut entries_bytes)?;
         let entries: Vec<BallEntry> = postcard::from_bytes(&entries_bytes)?;
         for ent in entries {
             std::fs::create_dir_all(dir.join(&ent.parent))?;
-            std::fs::write(dir.join(ent.parent).join(ent.basename), ent.contents)?;
+            std::fs::write(
+                dir.join(ent.parent).join(ent.basename),
+                ent.contents,
+            )?;
         }
         Ok(())
     }
@@ -108,7 +115,11 @@ impl Ball {
 /// Read files from `dir` and write to `baller`.
 ///
 /// If a file is encrypted, attampt to decrypt with `mkey`.
-fn ball<W: Write>(baller: W, dir: &Path, mkey: Option<&TheseusKey>) -> Result<W, TheseusError> {
+fn ball<W: Write>(
+    baller: W,
+    dir: &Path,
+    mkey: Option<&TheseusKey>,
+) -> Result<W, TheseusError> {
     let mut entries = Vec::new();
 
     for dirent in walkdir::WalkDir::new(dir) {
@@ -130,7 +141,8 @@ fn ball<W: Write>(baller: W, dir: &Path, mkey: Option<&TheseusKey>) -> Result<W,
             .strip_prefix(dir)
             .expect("dir is prefix")
             .into();
-        let basename = ent.path().file_name().expect("can't ball directory").into();
+        let basename =
+            ent.path().file_name().expect("can't ball directory").into();
         entries.push(BallEntry {
             parent,
             basename,
