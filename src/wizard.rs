@@ -13,10 +13,9 @@
 use std::{
     collections::HashMap,
     fmt::Debug,
-    fs::{exists, set_permissions, File, Permissions},
+    fs::{exists, File},
     io::{Read, Write},
     net::{IpAddr, Ipv4Addr, TcpStream},
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{self, Output, Stdio},
 };
@@ -38,7 +37,7 @@ use theseus::{
     plan::{DependentPlan, PlanItem},
     provider::theseus_keygen,
     target::*,
-    TheseusPlatform,
+    TheseusPlatform, TmpDir,
 };
 
 #[derive(Debug, Parser)]
@@ -217,9 +216,9 @@ fn wizard_open(p: &Path, mkey: Option<&TheseusKey>) -> Result<()> {
 
     let ck0 = crypto_hash(&contents);
     debug!("opened {} got ck {}", p.display(), ck0);
-    let td = nix::unistd::mkdtemp("/tmp/theseus-editXXXXXX")?;
-    set_permissions(&td, Permissions::from_mode(0o700))?;
-    let tp = td.join("editing");
+
+    let td = TmpDir::new()?;
+    let tp = td.as_ref().join("editing");
     File::create(&tp)?.write_all(&contents)?;
     contents.clear();
     debug!("wrote to tmpfile {}", tp.display());
@@ -233,7 +232,6 @@ fn wizard_open(p: &Path, mkey: Option<&TheseusKey>) -> Result<()> {
         .output()?;
 
     File::open(tp)?.read_to_end(&mut contents)?;
-    std::fs::remove_dir_all(td)?;
     let ck1 = crypto_hash(&contents);
     debug!("new ck {}", ck1);
     if ck0 == ck1 {

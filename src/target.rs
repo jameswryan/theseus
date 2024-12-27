@@ -538,7 +538,7 @@ pub fn plan_from_root(root: &Path) -> Result<Vec<FileTarget>, TheseusError> {
     // However, that require lifting nested `Iterator<Item = Result<T,E>>` to
     // Result<Iterator<Item = T>, E>, i.e.,
     // `Iterator<Item = Result<Result<Result<T,E0>,E1>,E2>` to
-    // `Result<Iterator<Item = T`
+    // `Result<Iterator<Item = T>, E0 | E1 | E2>`
     // itertools::process_result should be able to handle it, but the lifetime
     // requirements make it hard
     // let (files, _): (Vec<_>, Vec<_>) = itertools::process_results(WalkDir::new(root), |walker| {
@@ -564,4 +564,60 @@ pub fn plan_from_root(root: &Path) -> Result<Vec<FileTarget>, TheseusError> {
         }
     }
     Ok(plan)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    use crate::TmpDir;
+
+    fn build_test_plan() -> TmpDir {
+        let tmpdir = TmpDir::new().expect("create tmpdir");
+
+        let c1 = vec![1; 128];
+        let c2 = vec![2; 256];
+        let c3 = vec![3; 384];
+        let plandir = tmpdir
+            .inner
+            .join("plan")
+            .join(&tmpdir.inner.strip_prefix("/").unwrap())
+            .join("target");
+
+        let targetdir = tmpdir.inner.join("target");
+
+        std::fs::create_dir_all(plandir.join("dir1/dir2/dir3"))
+            .expect("create directories");
+        std::fs::write(plandir.join("f1:*:*:600"), c1).expect("write ones");
+        std::fs::write(plandir.join("dir1").join("f2:*:*:755"), c2)
+            .expect("write twos");
+        std::fs::write(plandir.join("dir1/dir2/dir3").join("f3:*:*:644"), c3)
+            .expect("write threes");
+
+        tmpdir
+    }
+
+    #[test]
+    fn test_plan_is_valid() -> Result<(), Box<dyn std::error::Error>> {
+        let tmpdir = build_test_plan();
+
+        let plan = plan_from_root(&tmpdir.inner)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_plan_executes_successfully(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let tmpdir = build_test_plan();
+        let plan = plan_from_root(&tmpdir.inner.join("plan"))?;
+        let failed_dep = plan.execute_dependencies().err();
+        println!("{:?}", failed_dep);
+        assert!(failed_dep.is_none());
+        let failed = plan.execute_plan(None).err();
+        println!("{:?}", failed);
+
+        assert!(failed.is_none());
+        Ok(())
+    }
 }

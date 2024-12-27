@@ -360,13 +360,10 @@ pub fn encrypt_in_place(
     p: &Path,
     mkey: &TheseusKey,
 ) -> Result<(), TheseusError> {
-    let mut data = std::fs::read(p)?;
-    let fkey = crypto_encrypt_in_place(&mut data)?;
-    let mut f = File::create(p)?;
-    let hdr = Header::new(mkey, &fkey)?;
-    f.write_all(hdr.as_bytes())?;
-    f.write_all(&data)?;
-    todo!()
+    let data = std::fs::read(p)?;
+    let f = File::create(p)?;
+    encfile_write(f, mkey, data)?;
+    Ok(())
 }
 
 /// Decrypt a file in-place using key `mkey`
@@ -413,17 +410,15 @@ pub fn rekey_in_place(
     from: &TheseusKey,
     to: &TheseusKey,
 ) -> Result<(), TheseusError> {
-    let mut f = std::fs::OpenOptions::new().read(true).write(true).open(p)?;
-    let fpt = encfile_read(&mut f, from)?;
-    f.set_len(0)?;
-    encfile_write(f, to, fpt)?;
-
-    Ok(())
+    let fpt = encfile_read(File::open(p)?, from)?;
+    encfile_write(File::create(p)?, to, fpt)
 }
 
 #[cfg(test)]
 mod test {
+
     use super::*;
+    use crate::TmpDir;
 
     #[test]
     fn test_hash_is_xoodyak() {
@@ -504,6 +499,37 @@ mod test {
         encfile_write(&mut efile, &mkey, file.clone())?;
         crypto_randbytes(&mut efile[MAGIC_LEN..MAGIC_LEN + 1])?;
         assert!(!is_encrypted(&efile[..], Some(&mkey))?);
+        Ok(())
+    }
+
+    #[test]
+    fn encrypt_decrypt_in_place_is_id() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let td = TmpDir::new()?;
+        let tf = td.as_ref().join("data.txt");
+        let data = vec![1u8; 256];
+        std::fs::write(&tf, &data)?;
+        let key = TheseusKey::from_entropy()?;
+        encrypt_in_place(&tf, &key)?;
+        assert!(is_encrypted(File::open(&tf)?, Some(&key))?);
+        decrypt_in_place(&tf, &key)?;
+        let _data = std::fs::read(&tf)?;
+        assert_eq!(data, _data);
+        Ok(())
+    }
+
+    #[test]
+    fn rekey_changes_keys() -> Result<(), Box<dyn std::error::Error>> {
+        let td = TmpDir::new()?;
+        let tf = td.as_ref().join("data.txt");
+        let data = vec![1u8; 256];
+        let from = TheseusKey::from_entropy()?;
+        let to = TheseusKey::from_entropy()?;
+        std::fs::write(&tf, &data)?;
+        encrypt_in_place(&tf, &from)?;
+        assert!(is_encrypted(File::open(&tf)?, Some(&from))?);
+        rekey_in_place(&tf, &from, &to)?;
+        assert!(is_encrypted(File::open(&tf)?, Some(&to))?);
         Ok(())
     }
 }

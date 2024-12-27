@@ -10,7 +10,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{fmt::Display, str::FromStr};
+use std::{
+    fmt::Display,
+    fs::{remove_dir_all, set_permissions, Permissions},
+    os::unix::fs::PermissionsExt,
+    path::PathBuf,
+    str::FromStr,
+};
+
+use error::TheseusError;
 
 pub mod ball;
 pub mod crypto;
@@ -122,4 +130,31 @@ pub fn is_golem<S: AsRef<str>>(s: S) -> Option<TheseusPlatform> {
     /*:<theseus-platform-triple>*/
     let p = sp.next().and_then(TheseusPlatform::new)?;
     Some(p)
+}
+
+/// Temporary Directory that is automatically removed on `Drop`
+pub struct TmpDir {
+    inner: PathBuf,
+}
+
+impl TmpDir {
+    /// Create a new temporary directory
+    pub fn new() -> Result<Self, TheseusError> {
+        let inner = nix::unistd::mkdtemp("/tmp/theseus-XXXXXX")
+            .map_err(|e| TheseusError::TmpDirCreation(e.to_string()))?;
+        set_permissions(&inner, Permissions::from_mode(0o700))?;
+        Ok(Self { inner })
+    }
+}
+
+impl AsRef<std::path::Path> for TmpDir {
+    fn as_ref(&self) -> &std::path::Path {
+        self.inner.as_ref()
+    }
+}
+
+impl Drop for TmpDir {
+    fn drop(&mut self) {
+        remove_dir_all(&self.inner).expect("can remove tmpdir");
+    }
 }

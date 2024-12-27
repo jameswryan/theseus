@@ -142,4 +142,7 @@ pub enum TheseusError {
 
     #[error("deserializing key {0}")]
     KeyDeserialize(String),
+
+    #[error("Creating temporary directory")]
+    TmpDirCreation(String),
 }
