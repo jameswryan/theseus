@@ -93,7 +93,7 @@ impl Golem {
     }
 
     /// Handle a new connection
-    // Doesn't return a `Result`, but does log encountered errors and responds
+    /// Doesn't return a `Result`, but does log encountered errors and responds
     /// to the client with appropriate responses
     fn conn_handler<C: std::io::Read + std::io::Write>(
         &mut self,
@@ -114,7 +114,8 @@ impl Golem {
                     info!("Recieved PING from wizard");
                     Ok(())
                 }
-            };
+            }
+            .inspect_err(|e| error!("{} for {:?}", e.to_string(), req));
 
             rsp.write_log(&mut conn);
         }
@@ -135,9 +136,8 @@ impl Golem {
         md: BallMd,
         conn: &mut C,
     ) -> Result<(), GolemError> {
-        trace!("handle_recv");
         /* recieve ball (if necessary) */
-        let ballbuf = match self.recv_ball(md, conn) {
+        let balldata = match self.recv_ball(md, conn) {
             Ok(buf) => buf,
             Err(GolemError::BallExists) => {
                 /* inform client */
@@ -147,6 +147,7 @@ impl Golem {
             }
             Err(e) => return Err(e),
         };
+        let ball = Ball::from_raw_parts(md, balldata);
 
         /* Unball mf */
         assert_ne!(
@@ -157,7 +158,7 @@ impl Golem {
         std::fs::remove_dir_all(&self.ball_root)
             .map_err(|e| GolemError::ServerError(e.to_string()))?;
         std::fs::create_dir(&self.ball_root).map_err(|e| GolemError::ServerError(e.to_string()))?;
-        ball_to_dir(&self.ball_root, &ballbuf)
+        ball.to_dir(&self.ball_root)
             .map_err(|e| GolemError::ServerError(e.to_string()))?;
         trace!("unballed {}", md.to_string());
         Ok(())
@@ -171,7 +172,7 @@ impl Golem {
     ) -> Result<Vec<u8>, GolemError> {
         let tname = md.to_string();
         let tpath = self.ball_dir.join(&tname);
-        trace!("handle_recv::md {}", tname);
+        trace!("receive ball with {}", tname);
 
         /* Check whether ball with that hash exists */
         if tpath.exists() {
@@ -223,7 +224,7 @@ impl Golem {
         f.write_all(&buf)
             .map_err(|e| GolemError::ServerError(e.to_string()))?;
 
-        trace!("Wrote to disk");
+        trace!("Wrote to disk {}", buf.len());
         Ok(buf)
     }
 

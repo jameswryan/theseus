@@ -10,15 +10,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::ffi::OsString;
+use std::io::Read;
 use std::{fmt::Display, io::Write, path::Path};
 
 use serde::{Deserialize, Serialize};
-use tracing::trace;
 
 use crate::crypto::*;
 use crate::error::TheseusError;
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Copy, Clone)]
+/// Metadata (size, checksum) about a ball of files
 pub struct BallMd {
     pub size: u64,
     pub checksum: TheseusHash,
@@ -38,38 +40,79 @@ impl Display for BallMd {
     }
 }
 
-/// Ball up directory at `dir`, with compression level `level`
-///
-/// Returns a litany of errors if anything fails
-pub fn dir_to_ball(
-    dir: &impl AsRef<Path>,
-    mkey: Option<&TheseusKey>,
-) -> Result<Vec<u8>, TheseusError> {
-    let mut ball = Vec::new();
-    let ze = snap::write::FrameEncoder::new(&mut ball);
-    let mut baller = tar::Builder::new(ze);
-    baller.mode(tar::HeaderMode::Deterministic);
-
-    theseus_ball_up(&mut baller, dir.as_ref(), mkey)?.finish()?;
-    // baller
-    //     .append_dir_all(".", dir)
-    //     .map_err(|e| TheseusError::Archive(e.to_string()))?;
-    baller
-        .into_inner()
-        .map_err(|e| TheseusError::Archive(e.to_string()))?
-        .flush()
-        .map_err(|e| TheseusError::Compression(e.to_string()))?;
-    Ok(ball)
+#[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
+/// A file entry in a ball
+struct BallEntry {
+    /// File parent
+    parent: OsString,
+    /// File basename
+    basename: OsString,
+    /// File contents
+    contents: Vec<u8>,
 }
 
-fn theseus_ball_up<W: Write>(
-    baller: &mut tar::Builder<W>,
-    dir: &Path,
-    mkey: Option<&TheseusKey>,
-) -> Result<tar::Builder<W>, TheseusError> {
-    for ent in walkdir::WalkDir::new(dir) {
-        let ent = ent.map_err(|e| TheseusError::DirDir(e.to_string()))?;
-        trace!("Entry {}", ent.path().display());
+#[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
+pub struct Ball {
+    /// Ball Metadata
+    md: BallMd,
+    /// Ball entries, stored compressed
+    data: Vec<u8>,
+}
+
+impl Ball {
+    /// Create a new ball from
+    pub fn from_raw_parts(md: BallMd, data: Vec<u8>) -> Self {
+        Self { md, data }
+    }
+
+    /// Pack a directory into a ball
+    ///
+    /// If some files are encrypted, attempt to decrypt them with `mkey`. If
+    /// that fails, an error is returned.
+    pub fn from_dir(dir: &Path, mkey: Option<&TheseusKey>) -> Result<Self, TheseusError> {
+        let ze = snap::write::FrameEncoder::new(Vec::new());
+        let ze = ball(ze, dir, mkey)?;
+        let data = ze
+            .into_inner()
+            .map_err(|e| TheseusError::Compression(e.to_string()))?;
+        let md = BallMd::new(&data);
+        Ok(Self { md, data })
+    }
+
+    /// Unpack a ball into `dir`
+    pub fn to_dir(self, dir: &Path) -> Result<(), TheseusError> {
+        let mut entries_bytes = Vec::new();
+        snap::read::FrameDecoder::new(&self.data[..]).read_to_end(&mut entries_bytes)?;
+        let entries: Vec<BallEntry> = postcard::from_bytes(&entries_bytes)?;
+        for ent in entries {
+            std::fs::create_dir_all(dir.join(&ent.parent))?;
+            std::fs::write(dir.join(ent.parent).join(ent.basename), ent.contents)?;
+        }
+        Ok(())
+    }
+    /// Split the ball into metadata and compressed entries
+    pub fn split(self) -> (BallMd, Vec<u8>) {
+        (self.md, self.data)
+    }
+
+    /// Get the length (in bytes) of the compressed entries
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+}
+
+/// Read files from `dir` and write to `baller`.
+///
+/// If a file is encrypted, attampt to decrypt with `mkey`.
+fn ball<W: Write>(baller: W, dir: &Path, mkey: Option<&TheseusKey>) -> Result<W, TheseusError> {
+    let mut entries = Vec::new();
+
+    for dirent in walkdir::WalkDir::new(dir) {
+        let ent = dirent.map_err(|e| TheseusError::DirDir(e.to_string()))?;
         if ent.path().is_dir() {
             continue;
         }
@@ -80,26 +123,21 @@ fn theseus_ball_up<W: Write>(
         } else {
             _contents
         };
-
-        let mut hdr = tar::Header::new_gnu();
-        hdr.set_uid(0);
-        hdr.set_gid(0);
-        hdr.set_mode(0o600);
-        hdr.set_entry_type(tar::EntryType::Regular);
-        baller.append_data(&mut hdr, ent.path(), &contents[..])?;
+        let parent = ent
+            .path()
+            .parent()
+            .expect("can't ball root")
+            .strip_prefix(dir)
+            .expect("dir is prefix")
+            .into();
+        let basename = ent.path().file_name().expect("can't ball directory").into();
+        entries.push(BallEntry {
+            parent,
+            basename,
+            contents,
+        });
     }
-    todo!()
-}
 
-/// Unball `ball` into dir
-///
-/// Returns a litany of errors if anything fails
-pub fn ball_to_dir(dir: &Path, ball: &[u8]) -> Result<(), TheseusError> {
-    let zd = snap::read::FrameDecoder::new(ball);
-    let mut unballer = tar::Archive::new(zd);
-    unballer
-        .unpack(dir)
-        .map_err(|e| TheseusError::Archive(e.to_string()))?;
-
-    Ok(())
+    let baller = postcard::to_io(&entries, baller)?;
+    Ok(baller)
 }

@@ -224,7 +224,7 @@ fn wizard_open(p: &Path, mkey: Option<&TheseusKey>) -> Result<()> {
     contents.clear();
     debug!("wrote to tmpfile {}", tp.display());
 
-    let ed = std::env!("EDITOR");
+    let ed = std::env::var("EDITOR")?;
     std::process::Command::new(ed)
         .arg(&tp)
         .stdin(process::Stdio::inherit())
@@ -399,8 +399,8 @@ trait Golem: std::io::Read + std::io::Write {
     }
 
     /// Send the golem a new Ball
-    fn upload(&mut self, ball_md: (BallMd, Vec<u8>)) -> anyhow::Result<()> {
-        let (md, ball) = ball_md;
+    fn upload(&mut self, ball: Ball) -> anyhow::Result<()> {
+        let (md, data) = ball.split();
 
         info!("send ballmd {}", md);
 
@@ -410,8 +410,8 @@ trait Golem: std::io::Read + std::io::Write {
             .inspect(|_| info!("ok to transmit"));
         match recv_err {
             Ok(_) => {
-                trace!("Want to write {}", ball.len());
-                self.write_all(&ball)
+                trace!("Want to write {}", data.len());
+                self.write_all(&data)
                     .map_err(|e| TheseusError::WriteBall(e.to_string()))?;
             }
             Err(GolemError::BallExists) => {
@@ -731,9 +731,10 @@ async fn try_main() -> anyhow::Result<()> {
                 construct_golem(&address, &username, port, args.golem_paths.into_iter())?;
 
             let _plan_valid = validate_plan(&dir)?;
-            let ball = dir_to_ball(&dir, mkey.as_ref())?;
-            let md = BallMd::new(&ball);
-            golem.upload((md, ball))?;
+            info!("plan at {} is valid", dir.display());
+            let ball = Ball::from_dir(&dir, mkey.as_ref())?;
+            golem.upload(ball)?;
+            info!("upload successful");
             golem.apply_plan()?;
 
             golem.kill()?;
