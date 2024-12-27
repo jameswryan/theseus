@@ -328,17 +328,24 @@ fn find_golems(
     search_paths: impl Iterator<Item = String>,
 ) -> Result<HashMap<TheseusPlatform, PathBuf>> {
     // TODO: better
-    let search_paths = search_paths.chain([
-        "/var/lib/theseus/golems".to_owned(),
-        "./data/golems".to_owned(),
-    ]);
+    let syspath = &std::env::var("PATH")?;
+
+    let search_paths = search_paths
+        .chain([
+            "/var/lib/theseus/golems".to_owned(),
+            "./data/golems".to_owned(),
+        ])
+        .chain(
+            std::env::split_paths(&syspath)
+                .map(|p| p.to_string_lossy().into_owned()),
+        );
     let mut golems = HashMap::new();
     for sp in search_paths.filter(|p| Path::new(p).exists()) {
         debug!("Looking for golem in {sp}");
         for ent in std::fs::read_dir(sp)? {
             let ent = ent?;
             if ent.file_type()?.is_file() {
-                if let Some(p) = is_golem(ent.file_name().to_string_lossy()) {
+                if let Some(p) = is_golem(ent.path()) {
                     golems.insert(p, ent.path());
                 }
             }

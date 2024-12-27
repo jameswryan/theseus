@@ -34,6 +34,8 @@ pub const THESEUSD_DEFAULT_ADDR: std::net::Ipv4Addr =
 pub const THESEUSD_DEFAULT_PORT: u16 = 6666;
 pub const THESEUSD_DEFAULT_WORKDIR: &str = "/var/lib/theseus";
 
+pub const THESEUS_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub const fn theseusd_default_port() -> u16 {
     THESEUSD_DEFAULT_PORT
 }
@@ -114,22 +116,54 @@ impl Display for TheseusPlatform {
     }
 }
 
-/// Check that a string is a well-formed name for a golem binary
+/// Check whether a file is a golem binary
+///
+/// A golem binary is an executable file with a well formed name, or a copy of
+/// a golem for the current platform, identified by printing
+///     `Golem <current version>`
+/// on stdout when invoked with a `--version` argument
 ///
 /// A well-formed name has the format
 ///     `theseusg:<theseus-platform-triple>`
 /// where `<theseus-platform-triple>` is a rust target triple identifying a
-/// platform supported by theseus
+/// platform supported by theseus.
 ///
-/// If the name is well-formed, returns the `TheseusPlatform` supported by
-/// a golem with that name
-pub fn is_golem<S: AsRef<str>>(s: S) -> Option<TheseusPlatform> {
-    let mut sp = s.as_ref().split(':');
+/// If the name is well-formed, returns the `TheseusPlatform` supported by a
+/// golem with that name.
+pub fn is_golem<P: AsRef<std::path::Path>>(p: P) -> Option<TheseusPlatform> {
+    let pstr = p
+        .as_ref()
+        .file_name()
+        .expect("file name present")
+        .to_string_lossy();
+
+    if !pstr.starts_with("theseusg") {
+        return None;
+    }
+    golem_name_well_formed(&pstr).or(golem_binary_valid(p.as_ref()))
+}
+
+fn golem_binary_valid(binary: &std::path::Path) -> Option<TheseusPlatform> {
+    let expected = "Golem ".to_string() + THESEUS_VERSION;
+    let bin = std::process::Command::new(binary)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .output();
+    if bin.is_ok_and(|o| o.stdout.starts_with(expected.as_bytes())) {
+        Some(TheseusPlatform::current())
+    } else {
+        None
+    }
+}
+
+fn golem_name_well_formed(name: &str) -> Option<TheseusPlatform> {
+    let mut sp = name.split(':');
     /*`theseusg:`*/
     sp.next().and_then(|n| (n == "theseusg").then_some(()))?;
     /*:<theseus-platform-triple>*/
-    let p = sp.next().and_then(TheseusPlatform::new)?;
-    Some(p)
+    sp.next().and_then(TheseusPlatform::new)
 }
 
 /// Temporary Directory that is automatically removed on `Drop`
