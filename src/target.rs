@@ -454,7 +454,7 @@ impl PlanItem<Path> for FileTarget {
         })?;
 
         let m = self.attr.get_mode();
-        fchmodat(None, &self.src, m, FchmodatFlags::FollowSymlink).map_err(
+        fchmodat(None, &self.dst, m, FchmodatFlags::FollowSymlink).map_err(
             |e| {
                 TheseusError::Chmod(
                     self.src.display().to_string(),
@@ -463,7 +463,7 @@ impl PlanItem<Path> for FileTarget {
             },
         )?;
 
-        chown(&self.src, Some(uid), Some(gid)).map_err(|e| {
+        chown(&self.dst, Some(uid), Some(gid)).map_err(|e| {
             TheseusError::Chown(self.src.display().to_string(), e.to_string())
         })?;
 
@@ -609,15 +609,41 @@ mod test {
     #[test]
     fn test_plan_executes_successfully(
     ) -> Result<(), Box<dyn std::error::Error>> {
+        /* Build test */
         let tmpdir = build_test_plan();
         let plan = plan_from_root(&tmpdir.inner.join("plan"))?;
+
+        /* Dependencies */
         let failed_dep = plan.execute_dependencies().err();
         println!("{:?}", failed_dep);
         assert!(failed_dep.is_none());
-        let failed = plan.execute_plan(None).err();
+
+        /* Executes without errors */
+        let failed = plan.clone().execute_plan(None).err();
         println!("{:?}", failed);
 
         assert!(failed.is_none());
+
+        /* Sets metadata correctly */
+
+        for item in plan {
+            let FileTarget {
+                src,
+                dst,
+                attr,
+                saved,
+            } = item;
+
+            let st = stat(&dst)?;
+            if let Some(attr_mode) = attr.mode {
+                let st_mode = Mode::from_bits_truncate(st.st_mode);
+                println!("{st_mode:?} {attr_mode:?}");
+                assert_eq!(st_mode, attr_mode);
+            }
+            assert_eq!(st.st_gid, attr.get_gid()?.as_raw());
+            assert_eq!(st.st_uid, attr.get_uid()?.as_raw());
+        }
+
         Ok(())
     }
 }
