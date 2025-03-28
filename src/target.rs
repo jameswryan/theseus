@@ -584,8 +584,6 @@ mod test {
             .join(&tmpdir.inner.strip_prefix("/").unwrap())
             .join("target");
 
-        let targetdir = tmpdir.inner.join("target");
-
         std::fs::create_dir_all(plandir.join("dir1/dir2/dir3"))
             .expect("create directories");
         std::fs::write(plandir.join("f1:*:*:600"), c1).expect("write ones");
@@ -601,7 +599,7 @@ mod test {
     fn test_plan_is_valid() -> Result<(), Box<dyn std::error::Error>> {
         let tmpdir = build_test_plan();
 
-        let plan = plan_from_root(&tmpdir.inner)?;
+        let _ = plan_from_root(&tmpdir.inner)?;
 
         Ok(())
     }
@@ -628,10 +626,10 @@ mod test {
 
         for item in plan {
             let FileTarget {
-                src,
+                src: _src,
                 dst,
                 attr,
-                saved,
+                saved: _saved,
             } = item;
 
             let st = stat(&dst)?;
