@@ -114,7 +114,7 @@ pub fn crypto_randvec(n: usize) -> Result<Vec<u8>, TheseusError> {
 
 fn new_entropy() -> std::io::Result<[u8; 16]> {
     let mut e = [0u8; 16];
-    getrandom::getrandom(&mut e)?;
+    getrandom::fill(&mut e)?;
     Ok(e)
 }
 
