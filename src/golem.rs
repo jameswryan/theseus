@@ -249,10 +249,17 @@ impl Golem {
 }
 
 fn try_main(args: GolemArgs) -> anyhow::Result<()> {
+    /* Some systems don't allow open(2)-ing a file that is owned by a    */
+    /* different user in /tmp, so we must unlink the log file if present */
+    let log_file = args.log_dir.join("golem.log");
+    if std::fs::exists(&log_file)? {
+        std::fs::remove_file(&log_file)?;
+    }
     let log_file = std::fs::OpenOptions::new()
         .create(true)
-        .append(true)
-        .open(args.log_dir.join("golem.log"))?;
+        .truncate(true)
+        .write(true)
+        .open(log_file)?;
 
     let tracer = tracing_subscriber::fmt()
         .without_time()
