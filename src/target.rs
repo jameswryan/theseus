@@ -581,7 +581,7 @@ mod test {
         let plandir = tmpdir
             .inner
             .join("plan")
-            .join(&tmpdir.inner.strip_prefix("/").unwrap())
+            .join(tmpdir.inner.strip_prefix("/").unwrap())
             .join("target");
 
         std::fs::create_dir_all(plandir.join("dir1/dir2/dir3"))

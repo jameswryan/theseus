@@ -12,19 +12,22 @@
 
 use std::{
     collections::HashMap,
+    ffi::OsStr,
     fmt::Debug,
     fs::{exists, File},
     io::{Read, Write},
-    net::{IpAddr, Ipv4Addr, TcpStream},
+    net::TcpStream,
     path::{Path, PathBuf},
-    process::{self, Output, Stdio},
+    process::{self, Child, Output, Stdio},
 };
 
 use anyhow::{anyhow, bail, Context, Result};
 // TODO: Use Argh because it seems nicer and produces smaller binaries
 use clap::{CommandFactory, Parser, Subcommand};
-use nix::sys::stat::Mode;
-use openssh::{KnownHosts, Session, SessionBuilder};
+use nix::sys::{
+    signal::{kill, Signal},
+    stat::Mode,
+};
 use tracing::{debug, error, info, instrument, trace};
 use walkdir::WalkDir;
 
@@ -528,29 +531,38 @@ impl Golem for LocalGolem {
     }
 }
 
+pub fn over_ssh<I, S>(host: &str, user: &str, cmd: I) -> process::Command
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut sshcmd = process::Command::new("ssh");
+    sshcmd.args([&format!("{user}@{host}")]);
+    cmd.into_iter().for_each(|c| {
+        sshcmd.arg(c);
+    });
+    sshcmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    sshcmd
+}
+
 struct RemoteGolem {
-    session: Session,
+    fwd_handle: Child,
+    golem_handle: Child,
     stream: TcpStream,
-    forward: (openssh::ForwardType, std::net::SocketAddr),
 }
 
 impl RemoteGolem {
-    async fn construct(
+    fn construct(
         host: &str,
         user: &str,
         port: u16,
         golem_paths: impl Iterator<Item = String>,
     ) -> Result<Self> {
-        info!("Establishing session with {host}");
-        let mut session = SessionBuilder::default()
-            .known_hosts_check(KnownHosts::Strict)
-            .connect_mux(format!("{user}@{host}"))
-            .await?;
-        debug!("Session established");
-
         info!("Getting {host} platform");
-        let platform = Self::get_remote_platform(&mut session)
-            .await
+        let platform = Self::get_remote_platform(host, user)
             .context("getting remote platform")?;
         info!("Platform is {platform}");
 
@@ -561,57 +573,45 @@ impl RemoteGolem {
             golems.get(&platform).ok_or(anyhow!("no golems found"))?;
         debug!("Found golem at {}", golem_path.display());
 
+        info!("Forwarding remote port {port} to local port {port}");
+        let fwd_handle = process::Command::new("ssh")
+            .args([
+                &format!("{user}@{host}"),
+                "-N",
+                &format!("-R{port}:localhost:{port}"),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .context("creating port forward")?;
+        debug!("Forwarded");
+
         info!("Copying golem to {host}",);
         copy_golem_to(&(host, user), golem_path, Path::new("/tmp/theseusg"))
             .context("copying golem")?;
-        session
-            .command("chmod")
-            .args(["+x", "/tmp/theseusg"])
-            .output()
-            .await
+
+        over_ssh(host, user, ["chmod", "700", "/tmp/theseusg"])
+            .spawn()
+            .context("chmod golem")?
+            .wait()
             .context("chmod golem")?;
         debug!("Copied");
 
-        info!("Forwarding remote port {port} to local port {port}");
-        let (fwt, fwsck) = (
-            openssh::ForwardType::Remote,
-            std::net::SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-                port,
-            ),
-        );
-
-        session
-            .request_port_forward(
-                fwt,
-                openssh::Socket::from(fwsck),
-                openssh::Socket::from(fwsck),
-            )
-            .await
-            .context("while requesting port forward")?;
-        debug!("Forwarded");
+        let listener = std::net::TcpListener::bind(("localhost", port))
+            .context("bind to localhost:{port}")?;
 
         info!("Starting golem on {host}",);
         // In theory it would be nice to keep a handle to the golem. However,
         // we can't actually kill it properly. Instead, we can use our stream
         // to send it a 'Kill' request when we're finished
-        session
-            .command("/tmp/theseusg")
-            .args(["-vvvv"])
+        let golem_handle = over_ssh(host, user, ["/tmp/theseusg", "-vvvv"])
             .spawn()
-            .await
-            .context("while spawning golem")?
-            .disconnect()
-            .await
-            .context("while disconnecting from golem")?;
+            .context("spawning golem")?;
         debug!("Started");
 
         info!("Waiting for golem to connect");
-        let mut stream = std::net::TcpListener::bind(("localhost", port))
-            .context("bind to localhost:{port}")?
-            .accept()
-            .context("accept connection")?
-            .0;
+        let mut stream = listener.accept().context("accept connection")?.0;
         debug!("Connected");
 
         info!("Testing golem communication");
@@ -622,21 +622,19 @@ impl RemoteGolem {
         debug!("Communication working");
 
         Ok(Self {
-            session,
             stream,
-            forward: (fwt, fwsck),
+            fwd_handle,
+            golem_handle,
         })
     }
 
-    async fn get_remote_platform(
-        sess: &mut Session,
-    ) -> Result<TheseusPlatform> {
-        let outv = sess
-            .command("uname")
-            .args(["-sm"])
-            .output()
-            .await
-            .context("while running remote uname")?
+    fn get_remote_platform(host: &str, user: &str) -> Result<TheseusPlatform> {
+        let uname = ["uname", "-sm"];
+        let outv = over_ssh(host, user, uname)
+            .spawn()
+            .context("spawn remote uname")?
+            .wait_with_output()
+            .context("remote uname output")?
             .stdout;
         let out = String::from_utf8_lossy(&outv);
         if out.contains("Linux x86_64") {
@@ -684,14 +682,15 @@ impl Golem for RemoteGolem {
         debug!("Killed");
 
         info!("Closing port forward");
-        let (fwt, fwsck) = self.forward;
-        futures::executor::block_on(
-            self.session.close_port_forward(fwt, fwsck, fwsck),
-        )?;
+        let fwpid = nix::unistd::Pid::from_raw(self.fwd_handle.id() as i32);
+        kill(fwpid, Signal::SIGTERM).context("SIGTERM to fwd ssh")?;
+        self.fwd_handle.wait().context("while fwd ssh dies")?;
         debug!("Closed");
 
-        info!("Closing session");
-        futures::executor::block_on(self.session.close())?;
+        info!("Closing golem handle");
+        let gpid = nix::unistd::Pid::from_raw(self.golem_handle.id() as i32);
+        kill(gpid, Signal::SIGTERM).context("SIGTERM to golem ssh")?;
+        self.golem_handle.wait().context("while golem ssh dies")?;
         debug!("Closed");
 
         Ok(())
@@ -708,13 +707,16 @@ fn construct_golem(
         "localhost" | "127.0.0.1" => {
             Ok(Box::new(LocalGolem::construct(port, golem_paths)?))
         }
-        _ => Ok(Box::new(futures::executor::block_on(
-            RemoteGolem::construct(addr, user, port, golem_paths),
+        _ => Ok(Box::new(RemoteGolem::construct(
+            addr,
+            user,
+            port,
+            golem_paths,
         )?)),
     }
 }
 
-async fn try_main() -> anyhow::Result<()> {
+fn try_main() -> anyhow::Result<()> {
     let args = WizardArgs::try_parse()?;
 
     let tracer = tracing_subscriber::fmt()
@@ -840,9 +842,8 @@ async fn try_main() -> anyhow::Result<()> {
 }
 
 #[instrument]
-#[tokio::main]
-async fn main() {
-    match try_main().await {
+fn main() {
+    match try_main() {
         Ok(_) => {}
         Err(e) => eprintln!("{e:?}"),
     }

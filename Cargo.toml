@@ -8,17 +8,14 @@ anyhow = { version = "1.0.87", default-features = false, features = ["std"] }
 clap = { version = "4.5.17", default-features = false, features = ["derive", "help", "std", "cargo", "error-context"] }
 const-hex = "1.13.1"
 current_platform = "0.2.0"
-futures = { version = "0.3.31", default-features = false, features = ["executor"] }
 getrandom = { version = "0.3", features = [ "std" ] }
-nix = { version = "0.29.0", default-features = false, features = ["fs", "user", "feature"] }
-openssh = { version = "0.11.2", features = ["process-mux", "native-mux"] }
+nix = { version = "0.29.0", default-features = false, features = ["fs", "user", "feature", "signal"] }
 postcard = { version = "1.0.10", default-features = false, features = ["use-std", "alloc"] }
 serde = { version = "1.0.210", default-features = false, features = ["serde_derive", "default", "alloc"] }
 serde_bytes = { version = "0.11.15", default-features = false }
 snap = "1.1.1"
 subtle = { version = "2.6.1", features = ["const-generics"] }
 thiserror = { version = "2.0", default-features = false }
-tokio = { version = "1.40.0", features = ["rt", "rt-multi-thread"] }
 tracing = { version = "0.1.40", features = ["log"] }
 tracing-subscriber = "0.3.18"
 walkdir = "2.5.0"
