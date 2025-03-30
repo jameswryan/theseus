@@ -28,19 +28,13 @@ use nix::sys::{
     signal::{kill, Signal},
     stat::Mode,
 };
+use plan::{DependentPlan, PlanItem};
 use tracing::{debug, error, info, instrument, trace};
 use walkdir::WalkDir;
 
 use theseus::{
-    ball::*,
-    crypto::*,
-    error::*,
-    is_golem,
-    msg::*,
-    plan::{DependentPlan, PlanItem},
-    provider::theseus_keygen,
-    target::*,
-    TheseusPlatform, TmpDir,
+    ball::*, crypto::*, error::*, is_golem, msg::*, provider::theseus_keygen,
+    target::*, TheseusPlatform, TmpDir,
 };
 
 #[derive(Debug, Parser)]

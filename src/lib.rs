@@ -25,7 +25,6 @@ pub mod crypto;
 pub mod error;
 pub mod lvrw;
 pub mod msg;
-pub mod plan;
 pub mod provider;
 pub mod target;
 

@@ -16,13 +16,13 @@ use std::fs::copy;
 use std::path::{self, Path, PathBuf};
 
 use crate::error::*;
-use crate::plan::*;
 
 use nix::NixPath;
 use nix::{
     sys::stat::{fchmodat, stat, FchmodatFlags, Mode},
     unistd::{chown, getgid, getuid, Gid, Group, Uid, User},
 };
+use plan::*;
 use tracing::{debug, error, trace};
 use walkdir::WalkDir;
 

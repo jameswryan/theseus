@@ -16,13 +16,13 @@ use std::{
 };
 
 use clap::Parser;
+use plan::*;
 use tracing::{debug, error, info, trace, warn};
 
 use theseus::ball::*;
 use theseus::crypto::*;
 use theseus::error::*;
 use theseus::msg::*;
-use theseus::plan::*;
 use theseus::target::*;
 
 /// The Theseus Golem
