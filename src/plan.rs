@@ -12,7 +12,7 @@
 
 use tracing::error;
 
-pub trait PlanItem<Save: ?Sized>: Sized {
+pub trait PlanItem<Save: ?Sized>: Clone {
     type Error: std::error::Error;
 
     /// Forward execution of a plan item
@@ -33,8 +33,8 @@ pub trait PlanItem<Save: ?Sized>: Sized {
     fn identify(&self) -> String;
 }
 
-pub trait HasDeps<S: ?Sized, DS: ?Sized>: PlanItem<S> + Sized {
-    type Dep: PlanItem<DS> + Ord;
+pub trait HasDeps<S: ?Sized, DS: ?Sized>: PlanItem<S> {
+    type Dep: PlanItem<DS>;
 
     /// Get an iterator over the dependencies of this plan item.
     ///
@@ -65,6 +65,7 @@ pub trait Plan<S: ?Sized, Item: PlanItem<S>>:
         }
 
         completed.iter().for_each(|p| p.unwind());
+        /* Guaranteed to be Some(_) since we peeked */
         Err(plan.next().unwrap())
     }
 }
@@ -78,10 +79,9 @@ pub trait DependentPlan<
     DS: ?Sized,
     S: ?Sized,
     D: PlanItem<DS>,
-    DP: IntoIterator<Item = D>,
-    Item: PlanItem<S> + HasDeps<S, DS, Dep = D>,
->: IntoIterator<Item = Item> + Sized where
     DP: Plan<DS, D>,
+    IT: PlanItem<S> + HasDeps<S, DS, Dep = D>,
+>: Plan<S, IT>
 {
     /// Execute the dependencies of this plan
     fn execute_dependencies(&self) -> Result<(), D> {
@@ -93,5 +93,5 @@ pub trait DependentPlan<
     ///
     /// Dependencies of a plan are the union of the dependencies of the items
     /// in the plan
-    fn dependencies(&self) -> impl IntoIterator<Item = Item::Dep>;
+    fn dependencies(&self) -> impl Plan<DS, D>;
 }
