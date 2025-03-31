@@ -287,27 +287,19 @@ impl Ord for DirTarget {
 impl PlanItem<()> for DirTarget {
     type Error = TheseusError;
 
-    fn execute(self, _: Option<&()>) -> Result<Self, TheseusError> {
+    fn execute(&self, _: Option<&()>) -> Result<(), TheseusError> {
         trace!("executing DirTarget {}", self.path.display());
         if self.path.exists() && self.path.is_dir() {
-            return Ok(Self {
-                path: self.path,
-                attr: self.attr,
-                created: false,
-            });
+            return Ok(());
         }
         std::fs::create_dir(&self.path).map_err(|e| {
             TheseusError::Create(self.to_string(), e.to_string())
         })?;
         debug!("created {}", self.path.display());
-        Ok(DirTarget {
-            path: self.path,
-            attr: self.attr,
-            created: true,
-        })
+        Ok(())
     }
 
-    fn unwind(&self) {
+    fn unwind(&self, _: Option<&()>) {
         if self.created {
             std::fs::remove_dir(&self.path).unwrap_or_else(|e| {
                 error!("removing {} {}", self.path.display(), e)
@@ -325,7 +317,6 @@ pub struct FileTarget {
     src: PathBuf,
     dst: PathBuf,
     attr: Attributes,
-    saved: bool,
 }
 
 impl Display for FileTarget {
@@ -349,8 +340,10 @@ fn num_if(s: &str, radix: u32) -> Option<u32> {
 impl FileTarget {
     /// Read a FileTarget from a path
     ///
-    /// `p` is a local path, like `./bin/sh:root:root:755`.
+    /// `p` is a path, like `./bin/sh:root:root:755`.
     /// The destination is `/bin/sh`.
+    /// The prefix `prefix` is stripped before computing the destination
+    ///
     fn from_path(p: &Path, prefix: &Path) -> Result<Self, TheseusError> {
         if !p.try_exists()? {
             return Err(TheseusError::PathExist(
@@ -382,12 +375,40 @@ impl FileTarget {
         trace!("read target {}", src.display());
 
         let dst = PathBuf::from("/").join(dst_aparent).join(dst_fname);
-        Ok(Self {
-            src,
-            dst,
-            attr,
-            saved: false,
-        })
+        Ok(Self { src, dst, attr })
+    }
+
+    /// Read a FileTarget from a flattened path
+    ///
+    /// `p` is a flattend path, like `./_bin_sh:root:root:755`.
+    /// The destination is `/bin/sh`.
+    fn from_flat_path(p: &Path) -> Result<Self, TheseusError> {
+        if !p.try_exists()? {
+            return Err(TheseusError::PathExist(
+                p.to_string_lossy().to_string(),
+            ));
+        }
+        let src = path::absolute(PathBuf::from(p)).map_err(|e| {
+            TheseusError::Absolute(p.display().to_string(), e.to_string())
+        })?;
+        /* Satisfy ownership */
+        let rst_t = p
+            .file_name()
+            .ok_or(TheseusError::MissingFilename(p.display().to_string()))?
+            .to_string_lossy()
+            .into_owned();
+        let mut rst = rst_t.split(':').peekable();
+        let dst_fname = rst
+            .next()
+            .ok_or(TheseusError::MissingDst(p.display().to_string()))?;
+        let attr = match rst.peek() {
+            Some(_) => Attributes::parse(rst),
+            None => Attributes::unspecified(),
+        };
+        trace!("read target {}", src.display());
+
+        let dst = PathBuf::from("/").join(from_flat_path(dst_fname));
+        Ok(Self { src, dst, attr })
     }
 
     /// Get uid/gid of a FileTarget
@@ -400,11 +421,15 @@ impl FileTarget {
     }
 }
 
+/// Compute the journaled path of a FileTarget
+///
+/// The journaled path is a serialized FileTarget, except occurances of `/`
+/// are replaced with `_`
 #[inline]
-fn compute_save(
+fn journaled_path_of(
     p: &Path,
     prefix: Option<&Path>,
-) -> Result<Option<FileTarget>, TheseusError> {
+) -> Result<Option<PathBuf>, TheseusError> {
     if !p.exists() || prefix.is_none() {
         return Ok(None);
     }
@@ -423,30 +448,36 @@ fn compute_save(
         .map_or_else(|| st.st_gid.to_string(), |grp| grp.name);
     let mode = Mode::from_bits_truncate(st.st_mode);
 
-    let src = prefix.join(dst.display().to_string().replace('/', "_"));
-    Ok(Some(FileTarget {
-        src,
-        dst,
-        attr: Attributes {
-            own: Some(own),
-            grp: Some(grp),
-            mode: Some(mode),
-        },
-        saved: true,
-    }))
+    Ok(Some(prefix.to_path_buf().join(PathBuf::from(format!(
+        "{}:{}:{}:{}",
+        dst.display().to_string().replace('/', "_"),
+        own,
+        grp,
+        mode_to_string(mode)
+    )))))
+}
+
+#[inline(always)]
+fn to_flat_path(p: impl AsRef<Path>) -> String {
+    p.as_ref().to_string_lossy().replace("/", "_")
+}
+
+#[inline]
+fn from_flat_path(p: impl AsRef<Path>) -> String {
+    p.as_ref().to_string_lossy().replace("_", "/")
 }
 
 impl PlanItem<Path> for FileTarget {
     type Error = TheseusError;
 
-    fn execute(self, savepath: Option<&Path>) -> Result<Self, TheseusError> {
+    fn execute(&self, journal: Option<&Path>) -> Result<(), TheseusError> {
         trace!("execute {}", self.src.display());
         let (uid, gid) = self.ids()?;
 
-        let save = compute_save(&self.dst, savepath)?;
+        let save = journaled_path_of(&self.dst, journal)?;
         if let Some(save) = save.as_ref() {
-            copy(&self.dst, &save.src).map_err(|e| {
-                TheseusError::Copy(save.src.display().to_string(), e.kind())
+            copy(&self.dst, save).map_err(|e| {
+                TheseusError::Copy(save.display().to_string(), e.kind())
             })?;
         }
         copy(&self.src, &self.dst).map_err(|e| {
@@ -467,25 +498,37 @@ impl PlanItem<Path> for FileTarget {
             TheseusError::Chown(self.src.display().to_string(), e.to_string())
         })?;
 
-        Ok(save.unwrap_or(self))
+        Ok(())
     }
 
-    fn unwind(&self) {
+    fn unwind(&self, journal: Option<&Path>) {
         /* Remove emplaced file */
         nix::unistd::unlink(&self.dst).unwrap_or_else(|_| {
             panic!("remove written {}", self.src.display())
         });
 
-        /* Only need to restore if src was saved */
-        if self.saved {
-            copy(&self.src, &self.dst).unwrap_or_else(|e| {
-                panic!(
-                    "copy {} to {}: {}",
-                    self.dst.display(),
-                    self.src.display(),
-                    e
-                )
-            });
+        /* Only need to restore if self was saved and we have a journal */
+        /* If we don't have a journal, we can't possibly have saved anything */
+        if let Some(journal) = journal {
+            let flat_dst = to_flat_path(self.dst.clone());
+            for ent in journal.read_dir().expect("Reading from journal") {
+                let ent = ent.expect("Reading journal entry");
+                if ent
+                    .file_name()
+                    .to_string_lossy()
+                    .split(':')
+                    .next()
+                    .unwrap()
+                    .starts_with(&flat_dst)
+                {
+                    /* Isn't this convienient :) */
+                    let ent_target = FileTarget::from_flat_path(&ent.path())
+                        .expect("journal entries are flat_path FileTargets");
+                    ent_target
+                        .execute(None)
+                        .expect("Can restore journal entries");
+                }
+            }
         }
     }
 
@@ -572,7 +615,7 @@ mod test {
 
     use crate::TmpDir;
 
-    fn build_test_plan() -> TmpDir {
+    fn build_valid_successful_plan() -> TmpDir {
         let tmpdir = TmpDir::new().expect("create tmpdir");
 
         let c1 = vec![1; 128];
@@ -583,6 +626,9 @@ mod test {
             .join("plan")
             .join(tmpdir.inner.strip_prefix("/").unwrap())
             .join("target");
+
+        let journaldir = tmpdir.inner.join("journal");
+        std::fs::create_dir_all(journaldir).expect("create journaldir");
 
         std::fs::create_dir_all(plandir.join("dir1/dir2/dir3"))
             .expect("create directories");
@@ -595,53 +641,141 @@ mod test {
         tmpdir
     }
 
-    #[test]
-    fn test_plan_is_valid() -> Result<(), Box<dyn std::error::Error>> {
-        let tmpdir = build_test_plan();
+    fn build_valid_failure_plan() -> TmpDir {
+        let tmpdir = TmpDir::new().expect("create tmpdir");
 
-        let _ = plan_from_root(&tmpdir.inner)?;
+        let ca = [b'a'; 128];
+        let cb = [b'b'; 256];
+        let cc = [b'c'; 384];
+        let cd = [b'd'; 512];
+        let plandir = tmpdir
+            .inner
+            .join("plan")
+            .join(tmpdir.inner.strip_prefix("/").unwrap())
+            .join("target");
 
-        Ok(())
+        let journaldir = tmpdir.inner.join("journal");
+        std::fs::create_dir_all(journaldir).expect("create journaldir");
+
+        std::fs::create_dir_all(plandir.join("dir1/dir2/dir3"))
+            .expect("create directories");
+        std::fs::write(plandir.join("f1:*:*:600:"), &ca).expect("write as");
+        std::fs::write(
+            plandir.join("dir1").join("f2:not-a-real-user:*:755"),
+            &cb,
+        )
+        .expect("write bs");
+        std::fs::write(plandir.join("dir1/dir2/dir3").join("f3:*:*:644"), &cc)
+            .expect("write cs");
+
+        std::fs::create_dir(tmpdir.inner.join("target"))
+            .expect("create target dir");
+        std::fs::write(tmpdir.inner.join("target/f1"), &cd).expect("write ds");
+        /* Ensure consistent mode */
+        nix::sys::stat::fchmodat(
+            None,
+            &tmpdir.inner.join("target/f1"),
+            Mode::from_bits_truncate(0o755),
+            FchmodatFlags::FollowSymlink,
+        )
+        .expect("chmod");
+
+        tmpdir
     }
 
     #[test]
-    fn test_plan_executes_successfully(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn valid_successful_plan_is_valid() {
+        let tmpdir = build_valid_successful_plan();
+
+        plan_from_root(&tmpdir.inner.join("plan"))
+            .expect("valid plan is invalid?");
+    }
+
+    #[test]
+    fn valid_successful_plan_executes_successfully() {
         /* Build test */
-        let tmpdir = build_test_plan();
-        let plan = plan_from_root(&tmpdir.inner.join("plan"))?;
+        let tmpdir = build_valid_successful_plan();
+        let journal = tmpdir.inner.join("journal");
+        let plan = plan_from_root(&tmpdir.inner.join("plan"))
+            .expect("valid_plan is valid?");
 
         /* Dependencies */
         let failed_dep = plan.execute_dependencies().err();
-        println!("{:?}", failed_dep);
-        assert!(failed_dep.is_none());
+        assert_eq!(failed_dep, None);
 
         /* Executes without errors */
-        let failed = plan.clone().execute_plan(None).err();
-        println!("{:?}", failed);
-
-        assert!(failed.is_none());
+        let failed = plan.clone().execute_plan(Some(&journal)).err();
+        assert_eq!(failed, None);
 
         /* Sets metadata correctly */
-
         for item in plan {
             let FileTarget {
                 src: _src,
                 dst,
                 attr,
-                saved: _saved,
             } = item;
 
-            let st = stat(&dst)?;
+            let st = stat(&dst).unwrap();
             if let Some(attr_mode) = attr.mode {
                 let st_mode = Mode::from_bits_truncate(st.st_mode);
-                println!("{st_mode:?} {attr_mode:?}");
                 assert_eq!(st_mode, attr_mode);
             }
-            assert_eq!(st.st_gid, attr.get_gid()?.as_raw());
-            assert_eq!(st.st_uid, attr.get_uid()?.as_raw());
+            assert_eq!(st.st_gid, attr.get_gid().unwrap().as_raw());
+            assert_eq!(st.st_uid, attr.get_uid().unwrap().as_raw());
         }
+    }
 
-        Ok(())
+    #[test]
+    fn valid_failure_plan_fails_safe() {
+        let tmpdir = build_valid_failure_plan();
+        let journal = tmpdir.inner.join("journal");
+        let plan = plan_from_root(&tmpdir.inner.join("plan"))
+            .expect("valid_failure_plan is valid?");
+
+        /* Dependencies */
+        let failed_dep = plan.execute_dependencies().err();
+        assert_eq!(failed_dep, None);
+
+        /* Fails execution on correct item */
+        let failed_src = tmpdir
+            .inner
+            .join("plan")
+            .join(tmpdir.inner.strip_prefix("/").unwrap())
+            .join("target/dir1/f2:not-a-real-user:*:755");
+        let failed_exp = FileTarget {
+            src: failed_src.clone(),
+            dst: tmpdir.inner.join("target/dir1/f2"),
+            attr: Attributes {
+                own: Some("not-a-real-user".to_owned()),
+                grp: None,
+                mode: Some(string_to_mode("755").unwrap()),
+            },
+        };
+        let failed = plan
+            .clone()
+            .execute_plan(Some(&journal))
+            .err()
+            .expect("failure plan succeeded?");
+        assert_eq!(failed, failed_exp);
+
+        /* Exactly one journal entry*/
+        let mut reader = journal.read_dir().expect("read journal");
+        let j_ent = reader
+            .next()
+            .expect("journal has entry")
+            .expect("read journal entry");
+        assert!(reader.next().is_none(), "more than one journal entry?");
+
+        /* Journal entry has correct contents */
+        let j_ent_cntnts =
+            std::fs::read_to_string(j_ent.path()).expect("read journal entry");
+        let j_ent_exp_cntnts = String::from_utf8(vec![b'd'; 512]).unwrap();
+        assert_eq!(j_ent_cntnts, j_ent_exp_cntnts);
+
+        /* Correctly unwinds execution of successfully completed items */
+        let act_c14_file = tmpdir.inner.join("target/f1");
+        let act_c4_contents =
+            std::fs::read_to_string(act_c14_file).expect("read c14 file");
+        assert_eq!(act_c4_contents, j_ent_cntnts);
     }
 }
