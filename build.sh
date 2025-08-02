@@ -4,12 +4,14 @@ set -eu
 
 TARGET="$1"
 TARGET_DIR="target"
-OUT_DIR="golem"
+OUT_DIR="target/bins"
 
-cargo build --bin theseusg \
+cargo build \
 	--release \
 	--target "$TARGET" \
 	--target-dir "$TARGET_DIR"
 
 mkdir -p "$OUT_DIR"
-cp "$TARGET_DIR/$TARGET/release/theseusg" "$OUT_DIR/theseusg:$TARGET"
+for bin in theseus theseusg; do
+  cp "$TARGET_DIR/$TARGET/release/$bin" "$OUT_DIR/$bin:$TARGET"
+done
