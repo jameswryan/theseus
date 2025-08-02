@@ -9,8 +9,9 @@ task:
     image: docker.io/cimg/rust:1.88.0
   script:
     - rustup target add x86_64-unknown-linux-musl
-    - cargo build --release --target x86_64-unknown-linux-musl
-    - pwd
-    - ls target
-  artifacts:
-    path: "target/x86_64-unknown-linux-musl/release/{theseus,theseusg}"
+    - ./prepare-golem.sh x86_64-unknown-linux-musl
+  golem_artifacts:
+    path: "golem/*"
+  wizard_artifacts:
+    path: "target/x86_64-unknown-linux-musl/release/theseus"
+
