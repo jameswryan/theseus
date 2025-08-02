@@ -659,18 +659,18 @@ mod test {
 
         std::fs::create_dir_all(plandir.join("dir1/dir2/dir3"))
             .expect("create directories");
-        std::fs::write(plandir.join("f1:*:*:600:"), &ca).expect("write as");
+        std::fs::write(plandir.join("f1:*:*:600:"), ca).expect("write as");
         std::fs::write(
             plandir.join("dir1").join("f2:not-a-real-user:*:755"),
-            &cb,
+            cb,
         )
         .expect("write bs");
-        std::fs::write(plandir.join("dir1/dir2/dir3").join("f3:*:*:644"), &cc)
+        std::fs::write(plandir.join("dir1/dir2/dir3").join("f3:*:*:644"), cc)
             .expect("write cs");
 
         std::fs::create_dir(tmpdir.inner.join("target"))
             .expect("create target dir");
-        std::fs::write(tmpdir.inner.join("target/f1"), &cd).expect("write ds");
+        std::fs::write(tmpdir.inner.join("target/f1"), cd).expect("write ds");
         /* Ensure consistent mode */
         nix::sys::stat::fchmodat(
             None,
@@ -754,8 +754,7 @@ mod test {
         let failed = plan
             .clone()
             .execute_plan(Some(&journal))
-            .err()
-            .expect("failure plan succeeded?");
+            .expect_err("failure_plan_succeeded?");
         assert_eq!(failed, failed_exp);
 
         /* Exactly one journal entry*/
