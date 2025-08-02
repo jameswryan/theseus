@@ -11,6 +11,6 @@ task:
     - rustup target add x86_64-unknown-linux-musl
     - cargo build --release --target x86_64-unknown-linux-musl
     - pwd
-    - ls
+    - ls target
   artifacts:
-    path: "target/x86_64-unknown-linux-musl/theseus*"
+    path: "target/x86_64-unknown-linux-musl/release/{theseus,theseusg}"
