@@ -7,4 +7,6 @@ task:
   name: build-amd64linux
   container:
     image: docker.io/cimg/rust:1.88.0
-  script: cargo build --release --target x86_64-unknown-linux-musl
+  script:
+    - rustup target add x86_64-unknown-linux-musl
+    - cargo build --release --target x86_64-unknown-linux-musl
