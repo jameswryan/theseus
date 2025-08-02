@@ -140,12 +140,6 @@ enum Command {
         file: PathBuf,
     },
 
-    /// Create a new `file://` key
-    Keygen {
-        #[arg(required = true)]
-        path: PathBuf,
-    },
-
     /// Deal with crypto
     #[warn(
         incomplete_features,
@@ -154,18 +148,6 @@ enum Command {
     Crypto {
         #[command(subcommand)]
         action: CryptoAction,
-    },
-
-    /// Change the key provider for a file
-    Rekey {
-        #[arg(required = true)]
-        path: PathBuf,
-
-        #[arg(required = true)]
-        from: String,
-
-        #[arg(required = true)]
-        to: String,
     },
 }
 
@@ -180,6 +162,22 @@ enum CryptoAction {
     Encrypt {
         #[arg(required = true)]
         path: PathBuf,
+    },
+    /// Create a new `file://` key
+    Keygen {
+        #[arg(required = true)]
+        path: PathBuf,
+    },
+    /// Change the key provider for a file
+    Rekey {
+        #[arg(required = true)]
+        path: PathBuf,
+
+        #[arg(required = true)]
+        from: String,
+
+        #[arg(required = true)]
+        to: String,
     },
 }
 
@@ -260,6 +258,15 @@ fn wizard_crypto(act: CryptoAction, mkey: Option<&TheseusKey>) -> Result<()> {
     match act {
         CryptoAction::Decrypt { path } => Ok(encrypt_in_place(&path, mkey)?),
         CryptoAction::Encrypt { path } => Ok(decrypt_in_place(&path, mkey)?),
+        CryptoAction::Keygen { path } => {
+            Ok(theseus_keygen(&format!("file://{}", path.display()))?)
+        }
+        CryptoAction::Rekey { path, from, to } => {
+            let from = TheseusKey::from_provider(from)?;
+            let to = TheseusKey::from_provider(to)?;
+            rekey_in_place(&path, &from, &to)?;
+            Ok(())
+        }
     }
 }
 
@@ -818,16 +825,6 @@ fn try_main() -> anyhow::Result<()> {
             path_map(|p| pchmod(mode, p), &path, recurse)
         }
         Some(Command::Open { file }) => wizard_open(&file, mkey.as_ref()),
-        Some(Command::Keygen { path }) => {
-            Ok(theseus_keygen(&format!("file://{}", path.display()))?)
-        }
-        Some(Command::Rekey { path, from, to }) => {
-            let from = TheseusKey::from_provider(from)?;
-            let to = TheseusKey::from_provider(to)?;
-            rekey_in_place(&path, &from, &to)?;
-            Ok(())
-        }
-
         Some(Command::Crypto { action }) => {
             wizard_crypto(action, mkey.as_ref())
         }
