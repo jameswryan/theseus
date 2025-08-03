@@ -9,7 +9,7 @@ task:
     image: docker.io/cimg/rust:1.88.0
   script:
     - rustup target add x86_64-unknown-linux-musl
-    - ./build.sh x86_64-unknown-linux-musl
+    - make x86_64-unknown-linux-musl
   artifacts:
     path: "target/bins/*"
 

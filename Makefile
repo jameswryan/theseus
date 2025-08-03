@@ -17,7 +17,5 @@ aarch64-apple-darwin:
 	$(MAKE) build TARGET=$@
 
 
-
 clean:
-	cargo clean
-	rm -r $(TARGET_DIR)
+	rm -rf $(TARGET_DIR)
