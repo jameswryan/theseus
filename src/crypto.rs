@@ -94,13 +94,43 @@ pub fn crypto_kdf<IT: IntoIterator<Item = impl AsRef<[u8]>>>(
     TheseusKey(ck)
 }
 
+/// Draw uniformly random bytes from the system CSPRNG into `out`
+#[inline]
+fn randbytes(out: &mut [u8]) -> Result<(), TheseusError> {
+    #[cfg(not(target_os = "linux"))]
+    let c_err = unsafe {
+        libc::arc4random_buf(
+            out.as_mut_ptr() as *mut core::ffi::c_void,
+            out.len(),
+        );
+        0
+    };
+    #[cfg(target_os = "linux")]
+    let c_err = unsafe {
+        let r = libc::getrandom(
+            out.as_mut_ptr() as *mut core::ffi::c_void,
+            out.len(),
+            0,
+        );
+        if r == -1 {
+            r as u32
+        } else {
+            0
+        }
+    };
+
+    if c_err == 0 {
+        Ok(())
+    } else {
+        Err(TheseusError::Crypto)
+    }
+}
+
 /// Read uniformly random bytes from the system CSPRNG into `out`
 ///
 /// These bytes are suitable for use in a cryptographic key
 pub fn crypto_randbytes(out: &mut [u8]) -> Result<(), TheseusError> {
-    let mut rng_dev = File::open("/dev/random")?;
-    rng_dev.read_exact(out)?;
-    Ok(())
+    randbytes(out)
 }
 
 /// Read `n` uniformly random bytes from the system CSPRNG and return them
@@ -108,13 +138,13 @@ pub fn crypto_randbytes(out: &mut [u8]) -> Result<(), TheseusError> {
 /// These bytes are suitable for use in a cryptographic key
 pub fn crypto_randvec(n: usize) -> Result<Vec<u8>, TheseusError> {
     let mut out = vec![0u8; n];
-    crypto_randbytes(&mut out)?;
+    randbytes(&mut out)?;
     Ok(out)
 }
 
-fn new_entropy() -> std::io::Result<[u8; 16]> {
-    let mut e = [0u8; 16];
-    getrandom::fill(&mut e)?;
+fn new_entropy<const N: usize>() -> Result<[u8; N], TheseusError> {
+    let mut e = [0u8; N];
+    randbytes(&mut e)?;
     Ok(e)
 }
 
