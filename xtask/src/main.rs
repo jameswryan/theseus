@@ -44,7 +44,7 @@ fn move_binaries(target: TheseusPlatform) -> Result<()> {
     let wiz_to = bin_dir.clone() + "/theseus:" + &target.to_string();
     let gol_to = bin_dir.clone() + "/theseusg:" + &target.to_string();
 
-    fs::create_dir(bin_dir).context("create bin dir")?;
+    fs::create_dir_all(bin_dir).context("create bin dir")?;
 
     fs::copy(wiz_from, &wiz_to).context("copy wizard")?;
     fs::copy(gol_from, &gol_to).context("copy golem")?;
