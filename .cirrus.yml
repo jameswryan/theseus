@@ -15,7 +15,7 @@ task:
 
 task:
   name: build-aarch64darwin
-  container:
+  macos_instance:
     image: ghcr.io/cirruslabs/macos-runner:sonoma
   env: 
     PATH: $HOME/.cargo/bin:$PATH
