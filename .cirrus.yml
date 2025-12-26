@@ -42,7 +42,7 @@ task:
   container:
     dockerfile: ci/Containerfile
   build_script:
-    - cargo xtask build amd64-unknown-linux-musl
+    - cargo xtask build x86_64-unknown-linux-musl
     - cargo xtask build aarch64-unknown-linux-musl
     - cargo xtask build x86_64-unknown-illumos
   artifacts:
