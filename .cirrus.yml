@@ -23,8 +23,6 @@ task:
 
 docker_builder:
   name: build-linux-freebsd-illumos
-  depends_on:
-    - test
   container:
     dockerfile: ci/Containerfile
   build_script:
