@@ -1,7 +1,7 @@
 test_task:
   container:
-    image: docker.io/cimg/rust:1.88.0
-  test_script: cargo test
+    dockerfile: ci/Containerfile
+  test_script: cargo xtask test
 
 task:
   name: build-darwin
