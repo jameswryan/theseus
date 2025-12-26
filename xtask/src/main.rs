@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use std::fs;
 
@@ -21,6 +21,9 @@ enum Commands {
 
     /// Clean build artifacts
     Clean,
+
+    /// Test the project
+    Test,
 }
 
 const BIN_DIR: &str = "bins";
@@ -74,16 +77,27 @@ fn main() -> Result<()> {
                 .status()?
                 .success()
                 .then_some(())
-                .ok_or(anyhow!("cross failed to run"))?;
+                .ok_or(anyhow!("cross build failed"))?;
             move_binaries(target)?;
         }
         Commands::Clean => {
             std::process::Command::new("cross")
                 .args(["clean"])
-                .status()?;
+                .status()?
+                .success()
+                .then_some(())
+                .ok_or(anyhow!("cross clean failed"))?;
 
             std::fs::remove_dir_all(BIN_DIR).context("clean up bin dir")?;
         }
+        Commands::Test => {
+            std::process::Command::new("cross")
+                .args(["test"])
+                .status()?
+                .success()
+                .then_some(())
+                .ok_or(anyhow!("cross test failed"))?;
+        },
     }
 
     Ok(())
