@@ -13,6 +13,7 @@ task:
     - curl -proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > rustup.sh
     - sh rustup.sh -qy
     - rustup target add aarch64-apple-darwin
+    - cargo install cross
   build_script:
     - cargo xtask build aarch64-apple-darwin
   artifacts:
@@ -29,6 +30,7 @@ task:
     - sh rustup.sh -qy
     - rustup target add x86_64-unknown-freebsd
     - rustup target add aarch64-unknown-freebsd
+    - cargo install cross
   build_script:
     - cargo xtask build x86_64-unknown-freebsd
     - cargo xtask build aarch64-unknown-freebsd
