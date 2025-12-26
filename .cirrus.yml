@@ -5,6 +5,8 @@ test_task:
 
 task:
   name: build-darwin
+  depends_on:
+    - test
   macos_instance:
     image: ghcr.io/cirruslabs/macos-runner:sonoma
   env: 
@@ -19,31 +21,16 @@ task:
   artifacts:
     path: bins/*
 
-task:
-  name: build-freebsd
-  freebsd_instance:
-    image_family: freebsd-14-3
-  env:
-    PATH: $HOME/.cargo/bin:$PATH
-  deps_script:
-    - fetch https://sh.rustup.rs -o rustup.sh
-    - sh rustup.sh -qy
-    - rustup target add x86_64-unknown-freebsd
-    - rustup target add aarch64-unknown-freebsd
-    - cargo install cross
-  build_script:
-    - cargo xtask build x86_64-unknown-freebsd
-    - cargo xtask build aarch64-unknown-freebsd
-  artifacts:
-    path: bins/*
-
-task:
-  name: build-linux-illumos
+docker_builder:
+  name: build-linux-freebsd-illumos
+  depends_on:
+    - test
   container:
     dockerfile: ci/Containerfile
   build_script:
     - cargo xtask build x86_64-unknown-linux-musl
     - cargo xtask build aarch64-unknown-linux-musl
+    - rustup target add x86_64-unknown-freebsd
     - cargo xtask build x86_64-unknown-illumos
   artifacts:
     path: bins/*
