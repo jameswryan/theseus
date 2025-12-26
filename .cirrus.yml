@@ -4,17 +4,7 @@ test_task:
   test_script: cargo test
 
 task:
-  name: build-amd64linux
-  container:
-    image: docker.io/cimg/rust:1.88.0
-  script:
-    - rustup target add x86_64-unknown-linux-musl
-    - cargo xtask build x86_64-unknown-linux-musl
-  artifacts:
-    path: bins/*
-
-task:
-  name: build-aarch64darwin
+  name: build-darwin
   macos_instance:
     image: ghcr.io/cirruslabs/macos-runner:sonoma
   env: 
@@ -22,9 +12,37 @@ task:
   deps_script:
     - curl -proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > rustup.sh
     - sh rustup.sh -qy
-  build_script:
     - rustup target add aarch64-apple-darwin
+  build_script:
     - cargo xtask build aarch64-apple-darwin
+  artifacts:
+    path: bins/*
+
+task:
+  name: build-freebsd
+  freebsd_instance:
+    image_family: freebsd-14-3
+  env:
+    PATH: $HOME/.cargo/bin:$PATH
+  deps_script:
+    - fetch https://sh.rustup.rs -o rustup.sh
+    - sh rustup.sh -qy
+    - rustup target add x86_64-unknown-freebsd
+    - rustup target add aarch64-unknown-freebsd
+  build_script:
+    - cargo xtask build x86_64-unknown-freebsd
+    - cargo xtask build aarch64-unknown-freebsd
+  artifacts:
+    path: bins/*
+
+task:
+  name: build-linux-illumos
+  container:
+    dockerfile: ci/Containerfile
+  build_script:
+    - cargo xtask build amd64-unknown-linux-musl
+    - cargo xtask build aarch64-unknown-linux-musl
+    - cargo xtask build x86_64-unknown-illumos
   artifacts:
     path: bins/*
 

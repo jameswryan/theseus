@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use std::fs;
 
@@ -62,18 +62,23 @@ fn main() -> Result<()> {
         Commands::Build { target } => {
             let out_dir = get_out_dir();
 
-            std::process::Command::new("cargo")
+            std::process::Command::new("cross")
                 .args([
                     "build",
+                    "--package",
+                    "theseus",
                     "--release",
                     &format!("--target-dir={out_dir}"),
                     &format!("--target={target}"),
                 ])
-                .status()?;
+                .status()?
+                .success()
+                .then_some(())
+                .ok_or(anyhow!("cross failed to run"))?;
             move_binaries(target)?;
         }
         Commands::Clean => {
-            std::process::Command::new("cargo")
+            std::process::Command::new("cross")
                 .args(["clean"])
                 .status()?;
 
