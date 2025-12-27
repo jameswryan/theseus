@@ -8,6 +8,7 @@ variables:
 services:
     - docker.io/docker:24.0.6-dind
 before_script:
+  - docker --version
   - docker run docker.io/hello-world
   - cargo install cross
     
