@@ -4,7 +4,7 @@ on:
     branches:
       - github-actions
 permissions:
-  - read
+  contents: read
 jobs:
   test:
     name: test
