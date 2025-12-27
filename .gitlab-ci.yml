@@ -1,4 +1,4 @@
-image: docker.io/docker
+image: docker.io/cimg/rust:1.88.0
 variables:
     DOCKER_HOST: tcp://docker:2375/
     DOCKER_TLS_CERTDIR: ""
