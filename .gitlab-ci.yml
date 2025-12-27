@@ -5,7 +5,7 @@ variables:
     DOCKER_DRIVER: overlay2
     CROSS_REMOTE: 1
 services:
-    - docker.io/docker:dind
+    - docker.io/docker:24.0.6-dind
 before_script:
   - docker run docker.io/hello-world
   - cargo install cross
