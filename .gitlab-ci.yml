@@ -6,7 +6,6 @@ variables:
 services:
     - docker.io/docker:dind
 before_script:
-  - sudo apt-get update && sudo apt-get install docker.io
   - cargo install cross
 
 test:
