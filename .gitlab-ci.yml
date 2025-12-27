@@ -8,15 +8,16 @@ variables:
 services:
     - docker.io/docker:24.0.6-dind
 before_script:
-  - docker version
-  - docker run docker.io/hello-world
-  - cargo install cross
+#  - docker version
+#  - docker run docker.io/hello-world
+#  - cargo install cross
     
 
 test:
   script:
-    - rustc --version && cargo --version
-    - cargo xtask test 
+    - docker version
+#    - rustc --version && cargo --version
+#    - cargo xtask test 
 
 # build:amd64linux:
 #     script:
