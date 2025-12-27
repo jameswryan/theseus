@@ -12,14 +12,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: cargo install cross
-      - run: rustup target add x86_64-unknown-linux-musl
-      - run: rustup target add aarch64-unknown-linux-musl
-      - run: rustup target add x86_64-unknown-freebsd
-      - run: rustup target add x86_64-unknown-illumos
-      - run: cargo xtask build x86_64-unknown-linux-musl
-      - run: cargo xtask build aarch64-unknown-linux-musl
-      - run: cargo xtask build x86_64-unknown-freebsd
-      - run: cargo xtask build x86_64-unknown-illumos
+      - run: rustup target add ${{ matrix.target }}
+      - run: cargo xtask build ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
           path: bins/*
+      - matrix:
+          include:
+            - target: x86_64-unknown-linux-musl
+            - target: aarch64-unknown-linux-musl
+            - target: x86_64-unknown-freebsd
+            - target: x86_64-unknown-illumos
+
