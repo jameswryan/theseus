@@ -1,0 +1,22 @@
+image: "rust:1.88.0"
+
+test:
+  script:
+    - rustc --version && cargo --version
+    - cargo xtask test 
+
+build:amd64linux:
+    script:
+        - rustc --version && cross --version
+        - cargo xtask build x86_64-unknown-linux-musl
+        - cargo xtask build aarch64-unknown-linux-musl
+        - cargo xtask build x86_64-unknown-freebsd
+        - cargo xtask build x86_64-unknown-illumos
+
+variables:
+    DOCKER_HOST: tcp://docker:2375/
+    DOCKER_DRIVER: overlay2
+    CROSS_REMOTE: 1
+
+services:
+    - docker.io/docker:dind
