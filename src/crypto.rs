@@ -527,7 +527,7 @@ mod test {
         let file = vec![1u8; 256];
         let mut efile = Vec::new();
         encfile_write(&mut efile, &mkey, file.clone())?;
-        crypto_randbytes(&mut efile[MAGIC_LEN..MAGIC_LEN + 1])?;
+        efile[MAGIC_LEN] += 1;
         assert!(!is_encrypted(&efile[..], Some(&mkey))?);
         Ok(())
     }
