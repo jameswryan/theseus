@@ -9,22 +9,19 @@ services:
     - name: docker.io/docker:dind
       alias: docker
 before_script:
-#  - docker version
-#  - docker run docker.io/hello-world
-#  - cargo install cross
+  - cargo install cross
     
 
 test:
   script:
-    - docker version
-#    - rustc --version && cargo --version
-#    - cargo xtask test 
+    - rustc --version && cargo --version
+    - cargo xtask test 
 
-# build:amd64linux:
-#     script:
-#         - rustc --version && cargo --version
-#         - cargo xtask build x86_64-unknown-linux-musl
-#         - cargo xtask build aarch64-unknown-linux-musl
-#         - cargo xtask build x86_64-unknown-freebsd
-#         - cargo xtask build x86_64-unknown-illumos
+build:amd64linux:
+    script:
+        - rustc --version && cargo --version
+        - cargo xtask build x86_64-unknown-linux-musl
+        - cargo xtask build aarch64-unknown-linux-musl
+        - cargo xtask build x86_64-unknown-freebsd
+        - cargo xtask build x86_64-unknown-illumos
 
