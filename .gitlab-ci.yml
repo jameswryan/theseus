@@ -7,6 +7,7 @@ variables:
 services:
     - docker.io/docker:dind
 before_script:
+  - docker run docker.io/hello-world
   - cargo install cross
     
 
@@ -18,7 +19,6 @@ test:
 build:amd64linux:
     script:
         - rustc --version && cargo --version
-        - cargo install cross
         - cargo xtask build x86_64-unknown-linux-musl
         - cargo xtask build aarch64-unknown-linux-musl
         - cargo xtask build x86_64-unknown-freebsd
