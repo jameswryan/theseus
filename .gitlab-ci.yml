@@ -1,7 +1,17 @@
-image: "rust:1.88.0"
+image: "docker.io/cimg/rust:1.88.0"
+variables:
+    DOCKER_HOST: tcp://docker:2375/
+    DOCKER_DRIVER: overlay2
+    CROSS_REMOTE: 1
+services:
+    - docker.io/docker:dind
+before_script:
+  - sudo apt-get update && sudo apt-get install docker.io
+  - cargo install cross
 
 test:
   script:
+    - cargo install cross
     - rustc --version && cargo --version
     - cargo xtask test 
 
@@ -14,10 +24,3 @@ build:amd64linux:
         - cargo xtask build x86_64-unknown-freebsd
         - cargo xtask build x86_64-unknown-illumos
 
-variables:
-    DOCKER_HOST: tcp://docker:2375/
-    DOCKER_DRIVER: overlay2
-    CROSS_REMOTE: 1
-
-services:
-    - docker.io/docker:dind
