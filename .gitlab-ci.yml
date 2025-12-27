@@ -6,7 +6,8 @@ variables:
     FF_NETWORK_PER_BUILD: "true"
     CROSS_REMOTE: 1
 services:
-    - docker.io/docker:24.0.6-dind
+    - name: docker.io/docker:dind
+      alias: docker
 before_script:
 #  - docker version
 #  - docker run docker.io/hello-world
