@@ -597,7 +597,7 @@ pub fn plan_from_root(root: &Path) -> Result<Vec<FileTarget>, TheseusError> {
     //     |files| files.map(|p| FileTarget::from_path(&p)),
     // )?;
     let mut plan = Vec::new();
-    for entry in WalkDir::new(root) {
+    for entry in WalkDir::new(root).sort_by_file_name() {
         let entry = entry.map_err(|e| TheseusError::DirDir(e.to_string()))?;
         trace!("Entry {}", entry.path().display());
         if !entry.path().is_dir() {
@@ -659,22 +659,22 @@ mod test {
 
         std::fs::create_dir_all(plandir.join("dir1/dir2/dir3"))
             .expect("create directories");
-        std::fs::write(plandir.join("f1:*:*:600:"), ca).expect("write as");
+        std::fs::write(plandir.join("a1:*:*:600:"), ca).expect("write as");
         std::fs::write(
-            plandir.join("dir1").join("f2:not-a-real-user:*:755"),
+            plandir.join("dir1").join("b2:not-a-real-user:*:755"),
             cb,
         )
         .expect("write bs");
-        std::fs::write(plandir.join("dir1/dir2/dir3").join("f3:*:*:644"), cc)
+        std::fs::write(plandir.join("dir1/dir2/dir3").join("c3:*:*:644"), cc)
             .expect("write cs");
 
         std::fs::create_dir(tmpdir.inner.join("target"))
             .expect("create target dir");
-        std::fs::write(tmpdir.inner.join("target/f1"), cd).expect("write ds");
+        std::fs::write(tmpdir.inner.join("target/a1"), cd).expect("write ds");
         /* Ensure consistent mode */
         nix::sys::stat::fchmodat(
             None,
-            &tmpdir.inner.join("target/f1"),
+            &tmpdir.inner.join("target/a1"),
             Mode::from_bits_truncate(0o755),
             FchmodatFlags::FollowSymlink,
         )
@@ -741,10 +741,10 @@ mod test {
             .inner
             .join("plan")
             .join(tmpdir.inner.strip_prefix("/").unwrap())
-            .join("target/dir1/f2:not-a-real-user:*:755");
+            .join("target/dir1/b2:not-a-real-user:*:755");
         let failed_exp = FileTarget {
             src: failed_src.clone(),
-            dst: tmpdir.inner.join("target/dir1/f2"),
+            dst: tmpdir.inner.join("target/dir1/b2"),
             attr: Attributes {
                 own: Some("not-a-real-user".to_owned()),
                 grp: None,
@@ -757,7 +757,7 @@ mod test {
             .expect_err("failure_plan_succeeded?");
         assert_eq!(failed, failed_exp);
 
-        /* Exactly one journal entry*/
+        /* Exactly one journal entry */
         let mut reader = journal.read_dir().expect("read journal");
         let j_ent = reader
             .next()
@@ -772,7 +772,7 @@ mod test {
         assert_eq!(j_ent_cntnts, j_ent_exp_cntnts);
 
         /* Correctly unwinds execution of successfully completed items */
-        let act_c14_file = tmpdir.inner.join("target/f1");
+        let act_c14_file = tmpdir.inner.join("target/a1");
         let act_c4_contents =
             std::fs::read_to_string(act_c14_file).expect("read c14 file");
         assert_eq!(act_c4_contents, j_ent_cntnts);
