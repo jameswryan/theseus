@@ -1,5 +1,6 @@
 test_task:
-  image: docker.io/cimg/rust:1.88.0
+  container:
+    image: docker.io/cimg/rust:1.88.0
   test_script: cargo test
 
 task:
