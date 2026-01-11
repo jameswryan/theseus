@@ -21,14 +21,16 @@ task:
   artifacts:
     path: bins/*
 
-docker_builder:
+
+
+task:
   name: build-linux-freebsd-illumos
   container:
     dockerfile: ci/Containerfile
   build_script:
     - cargo xtask build x86_64-unknown-linux-musl
     - cargo xtask build aarch64-unknown-linux-musl
-    - rustup target add x86_64-unknown-freebsd
+    - cargo xtask build x86_64-unknown-freebsd
     - cargo xtask build x86_64-unknown-illumos
   artifacts:
     path: bins/*
