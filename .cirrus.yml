@@ -28,7 +28,9 @@ docker_builder:
   deps_script:
     - curl -proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > rustup.sh
     - sh rustup.sh -qy
-    - source .cargo/env
+    - echo $HOME
+    - ls -R /
+    - source ~/.cargo/env
     - rustup target add x86_64-unknown-linux-musl
     - rustup target add aarch64-unknown-linux-musl
     - rustup target add x86_64-unknown-freebsd
