@@ -23,10 +23,16 @@ task:
 
 
 
-task:
+docker-builder:
   name: build-linux-freebsd-illumos
-  container:
-    dockerfile: ci/Containerfile
+  deps_script:
+    - curl -proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > rustup.sh
+    - sh rustup.sh -qy
+    - rustup target add x86_64-unknown-linux-musl
+    - rustup target add aarch64-unknown-linux-musl
+    - rustup target add x86_64-unknown-freebsd
+    - rustup target add x86_66-unknown-illumos
+    - cargo install cross
   build_script:
     - cargo xtask build x86_64-unknown-linux-musl
     - cargo xtask build aarch64-unknown-linux-musl
