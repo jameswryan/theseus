@@ -1,7 +1,6 @@
 test_task:
-  container:
-    dockerfile: ci/Containerfile
-  test_script: cargo xtask test
+  image: docker.io/cimg/rust:1.88.0
+  test_script: cargo test
 
 task:
   name: build-darwin
@@ -23,7 +22,7 @@ task:
 
 
 
-docker-builder:
+docker_builder:
   name: build-linux-freebsd-illumos
   deps_script:
     - curl -proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > rustup.sh
