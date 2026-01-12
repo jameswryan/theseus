@@ -32,7 +32,7 @@ docker_builder:
     - rustup target add x86_64-unknown-linux-musl
     - rustup target add aarch64-unknown-linux-musl
     - rustup target add x86_64-unknown-freebsd
-    - rustup target add x86_66-unknown-illumos
+    - rustup target add x86_64-unknown-illumos
     - cargo install cross
   build_script:
     - cargo xtask build x86_64-unknown-linux-musl
