@@ -35,6 +35,7 @@ docker_builder:
     - rustup target add x86_64-unknown-illumos
     - cargo install cross
   build_script:
+    - export PATH=${PATH}:/root/.cargo/bin
     - cargo xtask build x86_64-unknown-linux-musl
     - cargo xtask build aarch64-unknown-linux-musl
     - cargo xtask build x86_64-unknown-freebsd
