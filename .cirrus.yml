@@ -37,8 +37,11 @@ docker_builder:
   build_script:
     - export PATH=${PATH}:/root/.cargo/bin
     - cargo xtask build x86_64-unknown-linux-musl
+    - cargo clean
     - cargo xtask build aarch64-unknown-linux-musl
+    - cargo clean
     - cargo xtask build x86_64-unknown-freebsd
+    - cargo clean
     - cargo xtask build x86_64-unknown-illumos
   artifacts:
     path: bins/*
