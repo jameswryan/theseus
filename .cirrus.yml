@@ -19,7 +19,7 @@ task:
   build_script:
     - cargo xtask build aarch64-apple-darwin
   artifacts:
-    path: bins/*
+    path: target/bins/*
 
 
 
@@ -44,5 +44,5 @@ docker_builder:
     - cargo clean
     - cargo xtask build x86_64-unknown-illumos
   artifacts:
-    path: bins/*
+    path: target/bins/*
 

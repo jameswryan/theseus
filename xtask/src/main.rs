@@ -1,6 +1,6 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
-use std::fs;
+use std::fs::{copy, create_dir_all, read_to_string, remove_dir_all};
 
 use theseus::TheseusPlatform;
 
@@ -26,9 +26,18 @@ enum Commands {
     Test,
 }
 
-const BIN_DIR: &str = "bins";
 
-fn get_out_dir() -> String {
+fn workspace_root() -> String {
+    std::path::Path::new(&env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(1)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
+fn out_dir() -> String {
     if let Ok(env_target) = std::env::var("CARGO_TARGET_DIR") {
         return env_target;
     };
@@ -36,21 +45,39 @@ fn get_out_dir() -> String {
     String::from("target")
 }
 
+fn bin_dir() -> String {
+  format!("{}/bins", out_dir())
+}
+
+fn version() -> String {
+    read_to_string(format!("{}/theseus/Cargo.toml", workspace_root()))
+        .expect("Can find theseus/Cargo.toml")
+        .lines()
+        .inspect(|l| eprintln!("{}", l))
+        .find(|ln| ln.starts_with("version = "))
+        .inspect(|l| eprintln!("{}", l))
+        .expect("Cargo.toml contains version string")
+        .split("\"")
+        .inspect(|l| eprintln!("{}", l))
+        .nth(1)
+        .expect("Version string is in \"\"")
+        .to_string()
+}
+
 fn move_binaries(target: TheseusPlatform) -> Result<()> {
-    let out_dir = get_out_dir();
-    let bin_dir = String::from(BIN_DIR);
-    let wiz_from =
-        out_dir.clone() + "/" + &target.to_string() + "/release/theseus";
-    let gol_from =
-        out_dir.clone() + "/" + &target.to_string() + "/release/theseusg";
+    let out_dir = out_dir();
+    let ver = version();
+    let bin_dir = bin_dir();
+    let wiz_from = format!("{}/{}/release/theseus", out_dir, target);
+    let gol_from = format!("{}/{}/release/theseusg", out_dir, target);
 
-    let wiz_to = bin_dir.clone() + "/theseus:" + &target.to_string();
-    let gol_to = bin_dir.clone() + "/theseusg:" + &target.to_string();
+    let wiz_to = format!("{}/theseus:{}:{}", bin_dir, ver, target);
+    let gol_to = format!("{}/theseusg:{}:{}", bin_dir, ver, target);
 
-    fs::create_dir_all(bin_dir).context("create bin dir")?;
+    create_dir_all(bin_dir).context("create bin dir")?;
 
-    fs::copy(wiz_from, &wiz_to).context("copy wizard")?;
-    fs::copy(gol_from, &gol_to).context("copy golem")?;
+    copy(wiz_from, &wiz_to).context("copy wizard")?;
+    copy(gol_from, &gol_to).context("copy golem")?;
 
     std::println!("Copied wizard to {wiz_to}");
     std::println!("Copied golem to {gol_to}");
@@ -63,7 +90,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Build { target } => {
-            let out_dir = get_out_dir();
+            let out_dir = out_dir();
 
             std::process::Command::new("cross")
                 .args([
@@ -88,7 +115,7 @@ fn main() -> Result<()> {
                 .then_some(())
                 .ok_or(anyhow!("cross clean failed"))?;
 
-            std::fs::remove_dir_all(BIN_DIR).context("clean up bin dir")?;
+            remove_dir_all(bin_dir()).context("clean up bin dir")?;
         }
         Commands::Test => {
             std::process::Command::new("cross")
@@ -97,7 +124,7 @@ fn main() -> Result<()> {
                 .success()
                 .then_some(())
                 .ok_or(anyhow!("cross test failed"))?;
-        },
+        }
     }
 
     Ok(())
